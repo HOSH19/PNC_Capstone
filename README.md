@@ -82,6 +82,37 @@ erDiagram
 - `unified_schema_dataset/sql/schema.sql`: relational schema definition.
 - `unified_schema_dataset/tables/`: generated CSV tables.
 
+## Repo layout & ownership
+
+```
+├── unified_ffiec_fdic_dataset/  # FFIEC/FDIC unified dataset build (Shu Han)
+├── db/                          # SQL migrations + bank crosswalk seed (this slice)
+│   ├── migrations/
+│   └── seed/
+├── pipeline/                    # incremental pollers (GDELT, EDGAR) + db client (this slice)
+│   └── loaders/                 # full loaders: FRED, yfinance, fundamentals (Phase 2+)
+├── scoring/                     # FinBERT + Gemini hybrid scorer (Phase 2)
+├── index/                       # stability index library + recompute CLI (Phase 3)
+│   └── config/                  # index parameters as versioned YAML
+├── dashboard/                   # Streamlit app (Phase 5)
+├── evals/                       # eval harness (Phase 6)
+│   ├── items/                   # gold set CSVs
+│   └── prompts/                 # bake-off entries, one file per person
+└── .github/workflows/           # ingest.yml (this slice)
+```
+
+- `unified_ffiec_fdic_dataset/` — FFIEC/FDIC structured dataset; owner: Shu Han.
+- `db/` — Postgres migrations and the bank crosswalk seed; adding a bank is one seed row, zero code changes.
+- `pipeline/` — incremental pollers (watermark + overlap window) and the thin DB client; `loaders/` will hold stateless full loaders (owner: TBD).
+- `scoring/` — hybrid text scorer consuming `raw_item` status columns (owner: TBD).
+- `index/` — stability index computation; parameters in `index/config/` YAML (owner: TBD).
+- `dashboard/` — read-only Streamlit views (owner: TBD).
+- `evals/` — gold-set evaluation harness and prompt bake-off (owner: TBD).
+
+The table schema in `db/migrations/` is the **only shared contract** between
+modules — modules communicate through those tables, never by importing each
+other's code.
+
 ## Data Sources
 - FFIEC Central Data Repository Call Reports
 - FDIC BankFind Suite API
