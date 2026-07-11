@@ -1,0 +1,6 @@
+bank_id,holding_name,bank_legal_name,cik,ticker,fdic_cert,rssd_id,gdelt_query,aliases,is_live,is_backtest,notes
+pnc,"PNC Financial Services Group, Inc.","PNC Bank, National Association",0000713676,PNC,6384,817824,"""PNC Financial"" OR ""PNC Bank""",PNC;PNC Bank;PNC Financial Services,true,false,PENDING TEAM RE-SELECTION
+jpm,JPMorgan Chase & Co.,"JPMorgan Chase Bank, National Association",0000019617,JPM,628,852218,"""JPMorgan Chase"" OR ""JPMorgan"" OR ""JP Morgan""",JPMorgan;JP Morgan;Chase Bank,true,false,PENDING TEAM RE-SELECTION
+bac,Bank of America Corporation,"Bank of America, National Association",0000070858,BAC,3510,480228,"""Bank of America""",Bank of America;BofA,true,false,PENDING TEAM RE-SELECTION
+citi,Citigroup Inc.,"Citibank, National Association",0000831001,C,7213,476810,"""Citigroup"" OR ""Citibank""",Citigroup;Citibank;Citi,true,false,PENDING TEAM RE-SELECTION
+wfc,Wells Fargo & Company,"Wells Fargo Bank, National Association",0000072971,WFC,3511,451965,"""Wells Fargo""",Wells Fargo,true,false,PENDING TEAM RE-SELECTION
