@@ -29,6 +29,12 @@ FORMS = {"8-K", "8-K/A", "10-Q", "10-Q/A", "10-K", "10-K/A"}
 # EDGAR first run looks back further than GDELT's 72h: big banks may not file
 # anything in 3 days, and the DoD needs a non-empty first run.
 FIRST_RUN_LOOKBACK = timedelta(days=90)
+# filingDate is an ET business date at day granularity while the watermark is
+# a UTC instant (up to a day ahead between 00:00 and ~04:00 UTC), and filings
+# can surface in filings.recent hours after acceptance. Re-scan a 2-day margin
+# behind the watermark; UNIQUE(source, external_id, bank_id) drops re-seen
+# accessions.
+OVERLAP = timedelta(days=2)
 EXCERPT_CHARS = 4000
 THROTTLE_S = 1.0
 MAX_RETRIES = 5
@@ -159,7 +165,8 @@ def main() -> None:
                 continue
             run_start = datetime.now(UTC)
             watermark = db.get_watermark(conn, "edgar", bank["bank_id"])
-            cutoff = (watermark or run_start - FIRST_RUN_LOOKBACK).date()
+            cutoff = ((watermark - OVERLAP) if watermark
+                      else run_start - FIRST_RUN_LOOKBACK).date()
             submissions = _throttled_get(SUBMISSIONS_URL.format(cik=bank["cik"])).json()
             rows = [
                 to_row(bank, f) for f in iter_recent_filings(submissions)

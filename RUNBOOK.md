@@ -56,8 +56,8 @@ SELECT * FROM pipeline_heartbeat ORDER BY run_at DESC LIMIT 10;
 
 **Idempotency check**: run the workflow a second time immediately — the new
 `pipeline_heartbeat` rows should show `items_inserted` at or near 0 (the
-15-minute overlap window may legitimately re-see a handful of items; the
-UNIQUE constraint drops them).
+overlap windows — 15 minutes for GDELT, 2 days for EDGAR — may legitimately
+re-see a handful of items; the UNIQUE constraint drops them).
 
 ## 5. Add a bank (no code changes)
 
