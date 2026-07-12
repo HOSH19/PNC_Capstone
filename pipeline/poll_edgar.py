@@ -111,8 +111,27 @@ def to_row(bank: dict, filing: dict) -> dict:
     form = filing["form"]
     filing_date = date.fromisoformat(filing["filingDate"])
     excerpt = None
+    excerpt_error = None
     if form.startswith("8-K") and filing["primaryDocument"]:
-        excerpt = fetch_excerpt(cik, accession, filing["primaryDocument"])
+        try:
+            excerpt = fetch_excerpt(cik, accession, filing["primaryDocument"])
+        except requests.HTTPError as exc:
+            # A 4xx on one primary document (renamed/withdrawn doc) must not
+            # wedge the whole run forever: keep the filing, just without an
+            # excerpt. Retry exhaustion on 429/5xx still raises RuntimeError
+            # and fails the run, so the watermark never advances past a
+            # transient outage.
+            excerpt_error = str(exc)
+            print(f"{bank['bank_id']}: excerpt fetch failed for {accession}: {exc}",
+                  file=sys.stderr)
+    meta = {
+        "form": form,
+        "items": [i.strip() for i in (filing["items"] or "").split(",") if i.strip()],
+        "acceptanceDateTime": filing["acceptanceDateTime"],
+        "primaryDocument": filing["primaryDocument"],
+    }
+    if excerpt_error:
+        meta["excerpt_error"] = excerpt_error
     return {
         "source": "edgar",
         "external_id": accession,
@@ -126,12 +145,7 @@ def to_row(bank: dict, filing: dict) -> dict:
         "text_excerpt": excerpt,
         "title_hash": None,
         "n_duplicates": 0,
-        "meta": {
-            "form": form,
-            "items": [i.strip() for i in (filing["items"] or "").split(",") if i.strip()],
-            "acceptanceDateTime": filing["acceptanceDateTime"],
-            "primaryDocument": filing["primaryDocument"],
-        },
+        "meta": meta,
     }
 
 
