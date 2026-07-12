@@ -51,6 +51,25 @@ def upsert_raw_items(conn, rows: list[dict]) -> int:
     return inserted
 
 
+def existing_title_hashes(conn, source: str, bank_id: str, hashes: list[str]) -> set[str]:
+    """Return which of the candidate title hashes are already stored.
+
+    Pre-insert dedup for syndicating sources: the overlap window can re-see
+    a story under a different representative URL, which UNIQUE(source,
+    external_id, bank_id) would not catch.
+    """
+    hashes = [h for h in hashes if h]
+    if not hashes:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT title_hash FROM raw_item "
+            "WHERE source = %s AND bank_id = %s AND title_hash = ANY(%s)",
+            (source, bank_id, hashes),
+        )
+        return {row["title_hash"] for row in cur.fetchall()}
+
+
 def get_watermark(conn, source: str, bank_id: str) -> datetime | None:
     with conn.cursor() as cur:
         cur.execute(

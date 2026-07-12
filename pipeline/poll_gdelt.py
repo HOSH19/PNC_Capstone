@@ -140,6 +140,12 @@ def main() -> None:
                 window_start = (watermark or run_start - FIRST_RUN_LOOKBACK) - OVERLAP
                 articles = fetch_window(bank["gdelt_query"], window_start, run_start)
                 rows = to_rows(bank["bank_id"], articles)
+                # The overlap re-fetch can pick a different representative URL
+                # for a story already stored (UNIQUE on external_id wouldn't
+                # catch it) — drop rows whose title we already have.
+                known = db.existing_title_hashes(
+                    conn, "gdelt", bank["bank_id"], [r["title_hash"] for r in rows])
+                rows = [r for r in rows if r["title_hash"] not in known]
                 n = db.upsert_raw_items(conn, rows)
                 db.set_watermark(conn, "gdelt", bank["bank_id"], run_start)
                 seen += len(articles)
