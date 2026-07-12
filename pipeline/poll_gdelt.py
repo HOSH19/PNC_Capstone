@@ -33,8 +33,11 @@ def _fmt(dt: datetime) -> str:
 
 
 def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
-    resp = throttled_get(API_URL, label="GDELT", params={
-        "query": f"({query})",
+    # GDELT rejects parentheses around anything that is not an OR list
+    # ("Parentheses may only be used around OR'd statements").
+    wrapped = f"({query})" if " OR " in query else query
+    resp = throttled_get(API_URL, label="GDELT", throttle_s=5.0, params={
+        "query": wrapped,
         "mode": "artlist",
         "format": "json",
         "maxrecords": MAX_RECORDS,

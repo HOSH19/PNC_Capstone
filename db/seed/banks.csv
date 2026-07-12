@@ -12,7 +12,7 @@ cof,Capital One Financial Corporation,"Capital One, National Association",000092
 schw,The Charles Schwab Corporation,"Charles Schwab Bank, SSB",0000316709,SCHW,57450,3150447,"""Charles Schwab"" OR ""Schwab Bank""",Charles Schwab;Schwab;Charles Schwab Bank,true,false,
 bny,The Bank of New York Mellon Corporation,The Bank of New York Mellon,0001390777,BNY,639,541101,"""BNY Mellon"" OR ""Bank of New York Mellon"" OR ""BNY""",BNY;BNY Mellon;Bank of New York Mellon,true,false,ticker changed BK->BNY in 2025
 stt,State Street Corporation,State Street Bank and Trust Company,0000093751,STT,14,35301,"""State Street Corporation"" OR ""State Street Bank""",State Street;State Street Bank,true,false,"bare ""State Street"" excluded from query (street-name noise)"
-axp,American Express Company,American Express National Bank,0000004962,AXP,27471,1394676,"""American Express"" OR ""Amex""",American Express;Amex,true,false,
+axp,American Express Company,American Express National Bank,0000004962,AXP,27471,1394676,"""American Express""",American Express;Amex,true,false,"query keeps only ""American Express"" (GDELT rejects short phrase ""Amex"")"
 fitb,Fifth Third Bancorp,"Fifth Third Bank, National Association",0000035527,FITB,6672,723112,"""Fifth Third""",Fifth Third;Fifth Third Bank,true,false,acquiring Comerica (announced 2025)
 mtb,M&T Bank Corporation,Manufacturers and Traders Trust Company,0000036270,MTB,588,501105,"""M&T Bank""",M&T Bank;Manufacturers and Traders Trust,true,false,
 key,KeyCorp,KeyBank National Association,0000091576,KEY,17534,280110,"""KeyCorp"" OR ""KeyBank""",KeyCorp;KeyBank,true,false,

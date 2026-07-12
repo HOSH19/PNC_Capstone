@@ -22,16 +22,19 @@ _last_request_at = 0.0
 def throttled_get(url: str, *, params: dict | None = None,
                   headers: dict | None = None,
                   retry_statuses: tuple = (429,),
+                  throttle_s: float = THROTTLE_S,
                   label: str = "") -> requests.Response:
     """GET with request spacing, exponential backoff, and Retry-After.
 
     Retries retry_statuses and all 5xx; raises RuntimeError when retries
     are exhausted, requests.HTTPError for any other non-2xx (e.g. 404).
+    throttle_s overrides the request spacing for stricter APIs (GDELT
+    effectively wants ~1 request per 5 s).
     """
     global _last_request_at
     resp = None
     for attempt in range(MAX_RETRIES):
-        wait = THROTTLE_S - (time.monotonic() - _last_request_at)
+        wait = throttle_s - (time.monotonic() - _last_request_at)
         if wait > 0:
             time.sleep(wait)
         _last_request_at = time.monotonic()
