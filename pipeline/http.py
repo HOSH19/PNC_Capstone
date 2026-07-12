@@ -38,10 +38,20 @@ def throttled_get(url: str, *, params: dict | None = None,
         if wait > 0:
             time.sleep(wait)
         _last_request_at = time.monotonic()
-        resp = requests.get(url, params=params, headers=headers, timeout=60)
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=60)
+        except requests.RequestException:
+            # Timeouts and connection resets deserve the same retry budget
+            # as a 5xx (GDELT gets slow under load).
+            if attempt + 1 >= MAX_RETRIES:
+                raise
+            time.sleep(max(1.0, throttle_s) * 2 ** attempt)
+            continue
         if resp.status_code in retry_statuses or resp.status_code >= 500:
             if attempt + 1 < MAX_RETRIES:  # no pointless sleep before giving up
-                delay = 2 ** attempt
+                # Scale backoff by the API's own pacing: 1/2/4/8 s for SEC,
+                # 5/10/20/40 s for GDELT, whose 429s outlast short waits.
+                delay = max(1.0, throttle_s) * 2 ** attempt
                 retry_after = resp.headers.get("Retry-After", "")
                 if retry_after.isdigit():
                     delay = max(delay, int(retry_after))
