@@ -113,6 +113,69 @@ The table schema in `db/migrations/` is the **only shared contract** between
 modules — modules communicate through those tables, never by importing each
 other's code.
 
+## Ingestion architecture
+
+Everything meets in one Supabase Postgres database. GitHub Actions runs the
+jobs; modules never import each other — they communicate only through the
+shared tables defined in `db/migrations/`.
+
+```mermaid
+flowchart LR
+    GDELT[GDELT DOC 2.0<br/>bank news] --> PG[poll_gdelt]
+    EDGAR[SEC EDGAR<br/>8-K / 10-Q / 10-K] --> PE[poll_edgar]
+
+    subgraph ACTIONS[GitHub Actions - ingest workflow]
+        SEED[seed job<br/>banks.csv → bank table] --> PG
+        SEED --> PE
+    end
+
+    PG --> RAW[(raw_item)]
+    PE --> RAW
+    PG -.progress.-> WM[(watermark)]
+    PE -.progress.-> WM
+    PG -.run log.-> HB[(pipeline_heartbeat)]
+    PE -.run log.-> HB
+
+    RAW --> SCORING[scoring - Phase 2] --> INDEX[stability index - Phase 3]
+```
+
+Four ideas explain the whole design:
+
+**1. One landing table.** Every collected text item — news article or SEC
+filing — becomes a row in `raw_item`, tagged with its `source` and the
+`bank_id` it mentions. `UNIQUE (source, external_id, bank_id)` means
+re-inserting something we already have is a silent no-op, so any run can be
+safely repeated. Downstream phases (scoring, index) only ever read this
+table; the `finbert_status` / `llm_status` columns are their work queue.
+
+**2. Watermark + overlap.** Each (source, bank) pair remembers when it was
+last polled (`watermark` table). The next run re-fetches from slightly
+*before* that point (15 min for GDELT, 2 days for EDGAR) so nothing slips
+through the crack between "published" and "indexed by the source" — and the
+UNIQUE key throws away whatever the overlap re-fetched. This is why a poller
+that crashes is self-healing: its watermark didn't move, so the next run
+covers the same window again.
+
+**3. Incremental pollers vs full loaders.** Sources that stream and won't
+replay the past (news, filings, RSS) get an *incremental poller* in
+`pipeline/` using the watermark pattern above. Sources that return their full
+history every time (FRED, yfinance, fundamentals) will get a *stateless full
+loader* in `pipeline/loaders/` that re-fetches everything and upserts into
+its own table — no watermark, and it never writes `raw_item`.
+
+**4. Failures are isolated but never silent.** A bad document only loses its
+excerpt; a bad bank (broken query, wrong CIK) is skipped and retried next
+run while the other banks continue; a bad source fails its own workflow job
+while the other source keeps running (`fail-fast: false` matrix). At every
+level the failure still surfaces: the run exits non-zero naming the failed
+banks, and `pipeline_heartbeat` records `ok = false`. Check
+`SELECT * FROM pipeline_heartbeat ORDER BY run_at DESC` before trusting the
+data.
+
+Day-to-day operations (applying migrations, secrets, adding a bank or a new
+source) are step-by-step in `RUNBOOK.md` — adding a bank is one CSV row (§5),
+adding a source touches four well-marked places (§6).
+
 ## Data Sources
 - FFIEC Central Data Repository Call Reports
 - FDIC BankFind Suite API
