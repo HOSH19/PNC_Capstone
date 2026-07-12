@@ -5,6 +5,7 @@ plus a re-run — no code changes. The aliases column is semicolon-separated.
 """
 
 import csv
+import sys
 from pathlib import Path
 
 from pipeline import db
@@ -18,15 +19,44 @@ COLUMNS = (
 
 
 def load_rows() -> list[dict]:
-    rows = []
+    """Parse and validate the seed CSV.
+
+    The CSV is hand-edited (RUNBOOK §5), and a crash here skips BOTH pollers
+    via the workflow guard — so instead of letting a ragged row or a stray
+    space blow up as AttributeError/ValueError, collect every problem with
+    its line number and exit with the full list.
+    """
+    rows, errors, seen_ids = [], [], set()
     with open(SEED_CSV, newline="") as f:
-        for r in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        if reader.fieldnames != list(COLUMNS):
+            sys.exit(f"banks.csv header mismatch:\n  expected: {list(COLUMNS)}\n"
+                     f"  found:    {reader.fieldnames}")
+        for lineno, r in enumerate(reader, start=2):  # header is line 1
+            if None in r or any(v is None for v in r.values()):
+                errors.append(f"line {lineno}: has more or fewer cells than "
+                              f"the {len(COLUMNS)}-column header")
+                continue
+            r = {k: v.strip() for k, v in r.items()}
+            if not r["bank_id"] or not r["holding_name"]:
+                errors.append(f"line {lineno}: bank_id and holding_name are required")
+                continue
+            if r["bank_id"] in seen_ids:
+                errors.append(f"line {lineno}: duplicate bank_id '{r['bank_id']}'")
+                continue
+            seen_ids.add(r["bank_id"])
+            try:
+                r["fdic_cert"] = int(r["fdic_cert"]) if r["fdic_cert"] else None
+                r["rssd_id"] = int(r["rssd_id"]) if r["rssd_id"] else None
+            except ValueError as exc:
+                errors.append(f"line {lineno} ({r['bank_id']}): {exc}")
+                continue
             r["aliases"] = [a.strip() for a in r["aliases"].split(";") if a.strip()]
-            r["fdic_cert"] = int(r["fdic_cert"]) if r["fdic_cert"] else None
-            r["rssd_id"] = int(r["rssd_id"]) if r["rssd_id"] else None
             r["is_live"] = r["is_live"].lower() == "true"
             r["is_backtest"] = r["is_backtest"].lower() == "true"
             rows.append(r)
+    if errors:
+        sys.exit("banks.csv invalid:\n  " + "\n  ".join(errors))
     return rows
 
 
