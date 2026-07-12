@@ -160,14 +160,17 @@ flowchart LR
     YF -.-> LOADERS
 
     subgraph DB[Supabase Postgres]
-        RAW[(raw_item)]
         BANKT[(bank crosswalk)]
-        FUND[(fundamentals tables<br/>planned)]
+        RAW[(raw_item)]
         OPS[(watermark<br/>pipeline_heartbeat)]
+        FUND[(fundamentals tables<br/>planned)]
     end
 
+    SEED -->|upsert| BANKT
     PG --> RAW
     PE --> RAW
+    PG -->|state| OPS
+    PE -->|state| OPS
     PRSS -.-> RAW
     LOADERS -.-> FUND
 
