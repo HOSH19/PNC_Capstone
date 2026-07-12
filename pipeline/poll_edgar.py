@@ -107,6 +107,17 @@ def iter_recent_filings(submissions: dict):
     keys = ("accessionNumber", "filingDate", "form", "primaryDocument",
             "items", "acceptanceDateTime")
     columns = [recent.get(k, []) for k in keys]
+    # A missing/renamed column would make zip() silently truncate every
+    # filing to zero while the watermark still advances past real filings —
+    # fail loudly instead and name the offending column. Reference length
+    # comes from the response itself so even all six keys going missing at
+    # once is caught.
+    reference = max((len(v) for v in recent.values() if isinstance(v, list)), default=0)
+    lengths = {k: len(c) for k, c in zip(keys, columns)}
+    if any(n != reference for n in lengths.values()):
+        raise RuntimeError(
+            f"filings.recent columns have unexpected lengths {lengths}; "
+            f"expected {reference} per column")
     for values in zip(*columns):
         yield dict(zip(keys, values))
 
