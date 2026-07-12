@@ -26,8 +26,10 @@ Repo → Settings → Secrets and variables → Actions → New repository secre
 ## 3. Trigger the workflow
 
 GitHub → Actions → **ingest** → Run workflow (branch `main`).
-The job seeds the `bank` table from `db/seed/banks.csv`, then runs the
-GDELT and EDGAR pollers. Each poller logs `<bank>: N seen, M inserted`.
+The `seed` job upserts `db/seed/banks.csv` into the `bank` table, then one
+`poll` matrix job per source runs in parallel (a failing source never blocks
+the others). Each poller logs `<bank>: N seen, M inserted`, and a failing
+bank is logged as `<bank>: FAILED: <cause>` without stopping the other banks.
 
 Local alternative (needs `.env` values exported, see `.env.example`):
 
@@ -83,8 +85,9 @@ touch the four places below.
    `pipeline/poll_gdelt.py` (the canonical template) and swap the
    fetch/transform parts. Keep: watermark + overlap window, throttle/backoff,
    pre-insert dedup where the source syndicates, heartbeat on both paths.
-3. `.github/workflows/ingest.yml`: add a step with the same guard as
-   Poll EDGAR (marked spot at the bottom of the file).
+3. `.github/workflows/ingest.yml`: add the module name to the `poll` job's
+   matrix (one line, marked spot). Job-level `needs: seed` +
+   `fail-fast: false` isolate failures for you — no per-step guards needed.
 4. Only if the source needs its own per-bank identifier: add a `bank` column
    via migration + mirror it in `db/seed/banks.csv` and
    `pipeline/seed_banks.py` COLUMNS (see header of `001_bank.sql`).

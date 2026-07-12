@@ -3,12 +3,13 @@ name: ingest
 on:
   workflow_dispatch:
 
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  SEC_USER_AGENT_EMAIL: ${{ secrets.SEC_USER_AGENT_EMAIL }}
+
 jobs:
-  ingest:
+  seed:
     runs-on: ubuntu-latest
-    env:
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      SEC_USER_AGENT_EMAIL: ${{ secrets.SEC_USER_AGENT_EMAIL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -21,16 +22,29 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Seed banks from CSV
-        id: seed
         run: python -m pipeline.seed_banks
 
-      - name: Poll GDELT
-        run: python -m pipeline.poll_gdelt
+  # One matrix leg per poller. Isolation is structural: pollers run only if
+  # seeding succeeded (needs: seed), and fail-fast: false means one failing
+  # source never blocks or cancels the others.
+  poll:
+    needs: seed
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # New pollers: add the module name here — one line. RUNBOOK.md §6.
+        module: [poll_gdelt, poll_edgar]
+    steps:
+      - uses: actions/checkout@v4
 
-      # Runs even if GDELT failed (the job still fails), but not if seeding failed.
-      - name: Poll EDGAR
-        if: ${{ !cancelled() && steps.seed.outcome == 'success' }}
-        run: python -m pipeline.poll_edgar
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
 
-      # New pollers: add a step here with the same guard as Poll EDGAR, so one
-      # failing source never blocks the others. Checklist: RUNBOOK.md §6.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ${{ matrix.module }}
+        run: python -m pipeline.${{ matrix.module }}
