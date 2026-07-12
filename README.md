@@ -76,12 +76,6 @@ erDiagram
 - Elevated Risk: sentiment decline aligns with weakening fundamentals.
 - Imminent Disruption: strong negative sentiment combines with critical fundamentals or confirmed distress events.
 
-## Repository Structure
-- `unified_schema_dataset/`: local dataset build pipeline, schema, and populated tables.
-- `unified_schema_dataset/scripts/`: scripts for FDIC refreshes, FFIEC Call Report ingestion, and derived modeling-table generation.
-- `unified_schema_dataset/sql/schema.sql`: relational schema definition.
-- `unified_schema_dataset/tables/`: generated CSV tables.
-
 ## Repo layout & ownership
 
 ```
@@ -102,6 +96,9 @@ erDiagram
 ```
 
 - `unified_ffiec_fdic_dataset/` — FFIEC/FDIC structured dataset; owner: Shu Han.
+  `scripts/` builds it (FDIC refreshes, FFIEC Call Report ingestion, derived
+  modeling table), `sql/schema.sql` is the schema definition, `tables/` holds
+  the generated CSVs.
 - `db/` — Postgres migrations and the bank crosswalk seed; adding a bank is one seed row, zero code changes.
 - `pipeline/` — incremental pollers (watermark + overlap window) and the thin DB client; `loaders/` will hold stateless full loaders (owner: TBD).
 - `scoring/` — hybrid text scorer consuming `raw_item` status columns (owner: TBD).
@@ -177,7 +174,15 @@ source) are step-by-step in `RUNBOOK.md` — adding a bank is one CSV row (§5),
 adding a source touches four well-marked places (§6).
 
 ## Data Sources
+
+Structured fundamentals (built into `unified_ffiec_fdic_dataset/`):
 - FFIEC Central Data Repository Call Reports
 - FDIC BankFind Suite API
 - FDIC Failed Bank List / failures endpoint
-- Financial news and SEC filing sources to be integrated in later phases
+
+Text signals (polled into `raw_item` by the ingest workflow):
+- GDELT DOC 2.0 — bank news articles
+- SEC EDGAR — 8-K, 10-Q, 10-K filings (8-K text excerpts included)
+
+Planned (Phase 2+): RSS feeds as an additional incremental source; FRED and
+market data via stateless full loaders in `pipeline/loaders/`.
