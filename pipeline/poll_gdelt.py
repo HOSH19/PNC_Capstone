@@ -128,22 +128,32 @@ def to_rows(bank_id: str, articles: list[dict]) -> list[dict]:
 def main() -> None:
     started = time.monotonic()
     seen = inserted = 0
+    failed: list[str] = []
     conn = db.connect()
     try:
         for bank in db.get_live_banks(conn):
             if not bank["gdelt_query"]:
                 continue
-            run_start = datetime.now(UTC)
-            watermark = db.get_watermark(conn, "gdelt", bank["bank_id"])
-            window_start = (watermark or run_start - FIRST_RUN_LOOKBACK) - OVERLAP
-            articles = fetch_window(bank["gdelt_query"], window_start, run_start)
-            rows = to_rows(bank["bank_id"], articles)
-            n = db.upsert_raw_items(conn, rows)
-            db.set_watermark(conn, "gdelt", bank["bank_id"], run_start)
-            seen += len(articles)
-            inserted += n
-            print(f"{bank['bank_id']}: {len(articles)} seen, {n} inserted")
-        db.write_heartbeat(conn, "poll_gdelt", seen, inserted, time.monotonic() - started, True)
+            try:
+                run_start = datetime.now(UTC)
+                watermark = db.get_watermark(conn, "gdelt", bank["bank_id"])
+                window_start = (watermark or run_start - FIRST_RUN_LOOKBACK) - OVERLAP
+                articles = fetch_window(bank["gdelt_query"], window_start, run_start)
+                rows = to_rows(bank["bank_id"], articles)
+                n = db.upsert_raw_items(conn, rows)
+                db.set_watermark(conn, "gdelt", bank["bank_id"], run_start)
+                seen += len(articles)
+                inserted += n
+                print(f"{bank['bank_id']}: {len(articles)} seen, {n} inserted")
+            except Exception as exc:
+                # One bank's bad query or API failure must not starve the
+                # banks after it. Its watermark stays put, so the missed
+                # window is retried next run.
+                conn.rollback()
+                failed.append(bank["bank_id"])
+                print(f"{bank['bank_id']}: FAILED: {exc}", file=sys.stderr)
+        db.write_heartbeat(conn, "poll_gdelt", seen, inserted,
+                           time.monotonic() - started, not failed)
     except Exception:
         try:
             conn.rollback()
@@ -153,6 +163,8 @@ def main() -> None:
         raise
     finally:
         conn.close()
+    if failed:
+        sys.exit(f"poll_gdelt: failed banks: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
