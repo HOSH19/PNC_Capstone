@@ -1,0 +1,33 @@
+name: ingest
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SEC_USER_AGENT_EMAIL: ${{ secrets.SEC_USER_AGENT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Seed banks from CSV
+        id: seed
+        run: python -m pipeline.seed_banks
+
+      - name: Poll GDELT
+        run: python -m pipeline.poll_gdelt
+
+      # Runs even if GDELT failed (the job still fails), but not if seeding failed.
+      - name: Poll EDGAR
+        if: ${{ !cancelled() && steps.seed.outcome == 'success' }}
+        run: python -m pipeline.poll_edgar
