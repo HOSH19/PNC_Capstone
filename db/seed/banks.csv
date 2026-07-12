@@ -4,3 +4,24 @@ jpm,JPMorgan Chase & Co.,"JPMorgan Chase Bank, National Association",0000019617,
 bac,Bank of America Corporation,"Bank of America, National Association",0000070858,BAC,3510,480228,"""Bank of America""",Bank of America;BofA,true,false,PENDING TEAM RE-SELECTION
 citi,Citigroup Inc.,"Citibank, National Association",0000831001,C,7213,476810,"""Citigroup"" OR ""Citibank""",Citigroup;Citibank;Citi,true,false,PENDING TEAM RE-SELECTION
 wfc,Wells Fargo & Company,"Wells Fargo Bank, National Association",0000072971,WFC,3511,451965,"""Wells Fargo""",Wells Fargo,true,false,PENDING TEAM RE-SELECTION
+gs,"The Goldman Sachs Group, Inc.",Goldman Sachs Bank USA,0000886982,GS,33124,2182786,"""Goldman Sachs""",Goldman Sachs;Goldman Sachs Group;Goldman Sachs Bank USA,true,false,
+ms,Morgan Stanley,"Morgan Stanley Bank, National Association",0000895421,MS,32992,1456501,"""Morgan Stanley""",Morgan Stanley;Morgan Stanley Bank,true,false,
+usb,U.S. Bancorp,U.S. Bank National Association,0000036104,USB,6548,504713,"""U.S. Bancorp"" OR ""US Bancorp"" OR ""U.S. Bank""",U.S. Bancorp;US Bancorp;U.S. Bank,true,false,"query term ""U.S. Bank"" may catch generic phrases"
+tfc,Truist Financial Corporation,Truist Bank,0000092230,TFC,9846,852320,"""Truist""",Truist;Truist Financial;Truist Bank,true,false,
+cof,Capital One Financial Corporation,"Capital One, National Association",0000927628,COF,4297,112837,"""Capital One""",Capital One;Capital One Financial,true,false,
+schw,The Charles Schwab Corporation,"Charles Schwab Bank, SSB",0000316709,SCHW,57450,3150447,"""Charles Schwab"" OR ""Schwab Bank""",Charles Schwab;Schwab;Charles Schwab Bank,true,false,
+bny,The Bank of New York Mellon Corporation,The Bank of New York Mellon,0001390777,BNY,639,541101,"""BNY Mellon"" OR ""Bank of New York Mellon"" OR ""BNY""",BNY;BNY Mellon;Bank of New York Mellon,true,false,ticker changed BK->BNY in 2025
+stt,State Street Corporation,State Street Bank and Trust Company,0000093751,STT,14,35301,"""State Street Corporation"" OR ""State Street Bank""",State Street;State Street Bank,true,false,"bare ""State Street"" excluded from query (street-name noise)"
+axp,American Express Company,American Express National Bank,0000004962,AXP,27471,1394676,"""American Express"" OR ""Amex""",American Express;Amex,true,false,
+fitb,Fifth Third Bancorp,"Fifth Third Bank, National Association",0000035527,FITB,6672,723112,"""Fifth Third""",Fifth Third;Fifth Third Bank,true,false,acquiring Comerica (announced 2025)
+mtb,M&T Bank Corporation,Manufacturers and Traders Trust Company,0000036270,MTB,588,501105,"""M&T Bank""",M&T Bank;Manufacturers and Traders Trust,true,false,
+key,KeyCorp,KeyBank National Association,0000091576,KEY,17534,280110,"""KeyCorp"" OR ""KeyBank""",KeyCorp;KeyBank,true,false,
+rf,Regions Financial Corporation,Regions Bank,0001281761,RF,12368,233031,"""Regions Financial"" OR ""Regions Bank""",Regions Financial;Regions Bank,true,false,
+hban,Huntington Bancshares Incorporated,The Huntington National Bank,0000049196,HBAN,6560,12311,"""Huntington Bancshares"" OR ""Huntington National Bank"" OR ""Huntington Bank""",Huntington Bancshares;Huntington Bank;Huntington National Bank,true,false,
+cfg,"Citizens Financial Group, Inc.","Citizens Bank, National Association",0000759944,CFG,57957,3303298,"""Citizens Financial Group"" OR ""Citizens Bank""",Citizens Financial Group;Citizens Bank,true,false,"query term ""Citizens Bank"" matches many small banks"
+ally,Ally Financial Inc.,Ally Bank,0000040729,ALLY,57803,3284070,"""Ally Financial"" OR ""Ally Bank""",Ally Financial;Ally Bank,true,false,
+ntrs,Northern Trust Corporation,The Northern Trust Company,0000073124,NTRS,913,210434,"""Northern Trust""",Northern Trust,true,false,
+zion,"Zions Bancorporation, National Association","Zions Bancorporation, N.A.",0000109380,ZION,2270,276579,"""Zions Bancorporation"" OR ""Zions Bank""",Zions;Zions Bank;Zions Bancorporation,true,false,holding and bank are the same entity
+wal,Western Alliance Bancorporation,Western Alliance Bank,0001212545,WAL,57512,3138146,"""Western Alliance""",Western Alliance;Western Alliance Bank,true,false,
+fcnca,"First Citizens BancShares, Inc.",First-Citizens Bank & Trust Company,0000798941,FCNCA,11063,491224,"""First Citizens BancShares"" OR ""First Citizens Bank""",First Citizens;First-Citizens Bank,true,false,"query term ""First Citizens Bank"" is a common bank name"
+ewbc,"East West Bancorp, Inc.",East West Bank,0001069157,EWBC,31628,197478,"""East West Bancorp"" OR ""East West Bank""",East West Bancorp;East West Bank,true,false,
