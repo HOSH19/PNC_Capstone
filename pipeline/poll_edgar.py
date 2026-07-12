@@ -169,26 +169,40 @@ def to_row(bank: dict, filing: dict) -> dict:
 def main() -> None:
     started = time.monotonic()
     seen = inserted = 0
+    failed: list[str] = []
     conn = db.connect()
     try:
         for bank in db.get_live_banks(conn):
             if not bank["cik"]:
                 continue
-            run_start = datetime.now(UTC)
-            watermark = db.get_watermark(conn, "edgar", bank["bank_id"])
-            cutoff = ((watermark - OVERLAP) if watermark
-                      else run_start - FIRST_RUN_LOOKBACK).date()
-            submissions = _throttled_get(SUBMISSIONS_URL.format(cik=bank["cik"])).json()
-            rows = [
-                to_row(bank, f) for f in iter_recent_filings(submissions)
-                if f["form"] in FORMS and date.fromisoformat(f["filingDate"]) >= cutoff
-            ]
-            n = db.upsert_raw_items(conn, rows)
-            db.set_watermark(conn, "edgar", bank["bank_id"], run_start)
-            seen += len(rows)
-            inserted += n
-            print(f"{bank['bank_id']}: {len(rows)} seen, {n} inserted")
-        db.write_heartbeat(conn, "poll_edgar", seen, inserted, time.monotonic() - started, True)
+            try:
+                # company_tickers.json publishes cik as an UNPADDED integer;
+                # pad here so a hand-pasted seed value cannot 404 the
+                # submissions URL.
+                bank["cik"] = bank["cik"].strip().zfill(10)
+                run_start = datetime.now(UTC)
+                watermark = db.get_watermark(conn, "edgar", bank["bank_id"])
+                cutoff = ((watermark - OVERLAP) if watermark
+                          else run_start - FIRST_RUN_LOOKBACK).date()
+                submissions = _throttled_get(SUBMISSIONS_URL.format(cik=bank["cik"])).json()
+                rows = [
+                    to_row(bank, f) for f in iter_recent_filings(submissions)
+                    if f["form"] in FORMS and date.fromisoformat(f["filingDate"]) >= cutoff
+                ]
+                n = db.upsert_raw_items(conn, rows)
+                db.set_watermark(conn, "edgar", bank["bank_id"], run_start)
+                seen += len(rows)
+                inserted += n
+                print(f"{bank['bank_id']}: {len(rows)} seen, {n} inserted")
+            except Exception as exc:
+                # One bank's bad CIK or API failure must not starve the banks
+                # after it. Its watermark stays put, so the missed window is
+                # retried next run.
+                conn.rollback()
+                failed.append(bank["bank_id"])
+                print(f"{bank['bank_id']}: FAILED: {exc}", file=sys.stderr)
+        db.write_heartbeat(conn, "poll_edgar", seen, inserted,
+                           time.monotonic() - started, not failed)
     except Exception:
         try:
             conn.rollback()
@@ -198,6 +212,8 @@ def main() -> None:
         raise
     finally:
         conn.close()
+    if failed:
+        sys.exit(f"poll_edgar: failed banks: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
