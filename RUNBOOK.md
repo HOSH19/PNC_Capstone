@@ -83,7 +83,9 @@ touch the four places below.
    CHECK (exact ALTER statements are in the header of `002_raw_item.sql`).
 2. `pipeline/poll_<source>.py`: copy the `main()` skeleton from
    `pipeline/poll_gdelt.py` (the canonical template) and swap the
-   fetch/transform parts. Keep: watermark + overlap window, throttle/backoff,
+   fetch/transform parts. Use `pipeline.http.throttled_get` for all requests
+   (headers/retry_statuses are parameters — don't fork the retry loop).
+   Keep: watermark + overlap window, per-bank failure containment,
    pre-insert dedup where the source syndicates, heartbeat on both paths.
 3. `.github/workflows/ingest.yml`: add the module name to the `poll` job's
    matrix (one line, marked spot). Job-level `needs: seed` +

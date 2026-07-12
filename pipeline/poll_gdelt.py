@@ -18,35 +18,14 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 
-import requests
-
 from pipeline import db
+from pipeline.http import throttled_get
 
 API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 MAX_RECORDS = 250
 OVERLAP = timedelta(minutes=15)
 FIRST_RUN_LOOKBACK = timedelta(hours=72)
 MIN_WINDOW = timedelta(minutes=1)   # bisect guard
-THROTTLE_S = 1.0
-MAX_RETRIES = 5
-
-_last_request_at = 0.0
-
-
-def _throttled_get(params: dict) -> requests.Response:
-    global _last_request_at
-    for attempt in range(MAX_RETRIES):
-        wait = THROTTLE_S - (time.monotonic() - _last_request_at)
-        if wait > 0:
-            time.sleep(wait)
-        _last_request_at = time.monotonic()
-        resp = requests.get(API_URL, params=params, timeout=60)
-        if resp.status_code == 429 or resp.status_code >= 500:
-            time.sleep(2 ** attempt)
-            continue
-        resp.raise_for_status()
-        return resp
-    raise RuntimeError(f"GDELT still failing after {MAX_RETRIES} retries: {resp.status_code}")
 
 
 def _fmt(dt: datetime) -> str:
@@ -54,7 +33,7 @@ def _fmt(dt: datetime) -> str:
 
 
 def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
-    resp = _throttled_get({
+    resp = throttled_get(API_URL, label="GDELT", params={
         "query": f"({query})",
         "mode": "artlist",
         "format": "json",

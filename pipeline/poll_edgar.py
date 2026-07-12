@@ -22,6 +22,7 @@ from html.parser import HTMLParser
 import requests
 
 from pipeline import db
+from pipeline.http import throttled_get
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_nodash}/{doc}"
@@ -36,10 +37,6 @@ FIRST_RUN_LOOKBACK = timedelta(days=90)
 # accessions.
 OVERLAP = timedelta(days=2)
 EXCERPT_CHARS = 4000
-THROTTLE_S = 1.0
-MAX_RETRIES = 5
-
-_last_request_at = 0.0
 
 
 def _headers() -> dict:
@@ -48,20 +45,10 @@ def _headers() -> dict:
     return {"User-Agent": f"PNC-Capstone academic research ({email})"}
 
 
-def _throttled_get(url: str) -> requests.Response:
-    global _last_request_at
-    for attempt in range(MAX_RETRIES):
-        wait = THROTTLE_S - (time.monotonic() - _last_request_at)
-        if wait > 0:
-            time.sleep(wait)
-        _last_request_at = time.monotonic()
-        resp = requests.get(url, headers=_headers(), timeout=60)
-        if resp.status_code in (403, 429) or resp.status_code >= 500:
-            time.sleep(2 ** attempt)
-            continue
-        resp.raise_for_status()
-        return resp
-    raise RuntimeError(f"SEC still failing after {MAX_RETRIES} retries: {resp.status_code} {url}")
+def _get(url: str) -> requests.Response:
+    # SEC throttles with 403 as well as 429, hence the wider retry set.
+    return throttled_get(url, headers=_headers(), retry_statuses=(403, 429),
+                         label="SEC")
 
 
 class _TextExtractor(HTMLParser):
@@ -97,7 +84,7 @@ def strip_html(html: str) -> str:
 def fetch_excerpt(cik: str, accession: str, primary_doc: str) -> str | None:
     url = ARCHIVES_URL.format(
         cik_int=int(cik), acc_nodash=accession.replace("-", ""), doc=primary_doc)
-    text = strip_html(_throttled_get(url).text)
+    text = strip_html(_get(url).text)
     return text[:EXCERPT_CHARS] or None
 
 
@@ -184,7 +171,7 @@ def main() -> None:
                 watermark = db.get_watermark(conn, "edgar", bank["bank_id"])
                 cutoff = ((watermark - OVERLAP) if watermark
                           else run_start - FIRST_RUN_LOOKBACK).date()
-                submissions = _throttled_get(SUBMISSIONS_URL.format(cik=bank["cik"])).json()
+                submissions = _get(SUBMISSIONS_URL.format(cik=bank["cik"])).json()
                 rows = [
                     to_row(bank, f) for f in iter_recent_filings(submissions)
                     if f["form"] in FORMS and date.fromisoformat(f["filingDate"]) >= cutoff
