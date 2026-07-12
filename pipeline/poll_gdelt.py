@@ -68,9 +68,19 @@ def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
     except ValueError:
         # GDELT returns plain-text errors (e.g. malformed query) with HTTP 200
         raise RuntimeError(f"GDELT non-JSON response: {resp.text[:200]}")
-    if len(articles) >= MAX_RECORDS and (end - start) > MIN_WINDOW:
-        mid = start + (end - start) / 2
-        return fetch_window(query, start, mid) + fetch_window(query, mid, end)
+    if len(articles) >= MAX_RECORDS:
+        if (end - start) > MIN_WINDOW:
+            mid = start + (end - start) / 2
+            return fetch_window(query, start, mid) + fetch_window(query, mid, end)
+        # GDELT ingests in 15-minute batches, so seendates cluster on batch
+        # boundaries: a full page at the minimum window cannot be split
+        # further, and the API has no cursor to page past 250. Anything older
+        # than the newest 250 in this window is unavailable — say so loudly
+        # instead of dropping it silently.
+        print(f"WARNING: still {len(articles)} articles at minimum window "
+              f"{_fmt(start)}-{_fmt(end)}; articles beyond the newest "
+              f"{MAX_RECORDS} are dropped (query: {query[:80]})",
+              file=sys.stderr)
     return articles
 
 
