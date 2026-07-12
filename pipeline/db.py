@@ -1,6 +1,10 @@
 """Thin Postgres client for the ingestion pipeline. Plain SQL, no ORM.
 
 Connection comes from SUPABASE_DB_URL (Supabase session-pooler DSN).
+
+Everything here is source-agnostic (source/job are parameters), so adding a
+new data source requires NO changes in this file — see RUNBOOK.md §6 for the
+full checklist.
 """
 
 import os

@@ -7,6 +7,10 @@ incrementality is client-side: keep filings newer than the watermark only.
 
 Forms kept: 8-K, 10-Q, 10-K (+ /A). For 8-Ks only, the primary document is
 fetched, HTML-stripped, and the first ~4000 chars stored as text_excerpt.
+
+New incremental pollers: copy the main() skeleton from poll_gdelt.py (the
+canonical template) rather than this file — EDGAR's client-side date filter
+is a source-specific quirk. Full checklist: RUNBOOK.md §6.
 """
 
 import re

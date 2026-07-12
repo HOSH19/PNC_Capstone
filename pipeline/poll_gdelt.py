@@ -5,6 +5,11 @@ A full page (exactly 250 rows) means the window overflowed — bisect it
 recursively. Syndication duplicates are folded before insert via a
 normalized-title hash. artlist has no per-article tone; we store only
 what it returns.
+
+This file doubles as the TEMPLATE for new incremental pollers: copy the
+main() skeleton (get_live_banks → get_watermark → fetch → to_rows →
+upsert_raw_items → set_watermark → write_heartbeat) and swap only the
+fetch/transform parts. Full checklist: RUNBOOK.md §6.
 """
 
 import hashlib

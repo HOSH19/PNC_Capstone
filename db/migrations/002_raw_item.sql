@@ -1,5 +1,9 @@
 -- 002_raw_item.sql — one row per ingested text item, all sources.
--- source is a CHECK (not an enum) so adding a source later is a one-line migration.
+-- source is a CHECK (not an enum) so adding a source later is a one-line migration:
+--   ALTER TABLE raw_item DROP CONSTRAINT raw_item_source_check;
+--   ALTER TABLE raw_item ADD CONSTRAINT raw_item_source_check
+--       CHECK (source IN ('gdelt', 'edgar', '<new-source>'));
+-- Full "adding a new source" checklist: RUNBOOK.md §6.
 
 CREATE TABLE raw_item (
     id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

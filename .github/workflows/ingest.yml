@@ -31,3 +31,6 @@ jobs:
       - name: Poll EDGAR
         if: ${{ !cancelled() && steps.seed.outcome == 'success' }}
         run: python -m pipeline.poll_edgar
+
+      # New pollers: add a step here with the same guard as Poll EDGAR, so one
+      # failing source never blocks the others. Checklist: RUNBOOK.md §6.

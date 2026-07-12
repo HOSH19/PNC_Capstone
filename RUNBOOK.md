@@ -69,6 +69,32 @@ UNIQUE constraint drops them).
    pick it up (first run for a new bank looks back 72 h on GDELT, 90 days
    on EDGAR).
 
+## 6. Add a new data source (for teammates)
+
+Shared infrastructure (`pipeline/db.py`, `watermark`, `pipeline_heartbeat`,
+the `UNIQUE(source, external_id, bank_id)` key) is source-agnostic — you only
+touch the four places below.
+
+**Incremental poller** (source won't replay the past — e.g. RSS):
+
+1. Migration `db/migrations/00X_add_<source>.sql`: extend the `raw_item.source`
+   CHECK (exact ALTER statements are in the header of `002_raw_item.sql`).
+2. `pipeline/poll_<source>.py`: copy the `main()` skeleton from
+   `pipeline/poll_gdelt.py` (the canonical template) and swap the
+   fetch/transform parts. Keep: watermark + overlap window, throttle/backoff,
+   pre-insert dedup where the source syndicates, heartbeat on both paths.
+3. `.github/workflows/ingest.yml`: add a step with the same guard as
+   Poll EDGAR (marked spot at the bottom of the file).
+4. Only if the source needs its own per-bank identifier: add a `bank` column
+   via migration + mirror it in `db/seed/banks.csv` and
+   `pipeline/seed_banks.py` COLUMNS (see header of `001_bank.sql`).
+
+**Full loader** (source returns full history — FRED, yfinance, fundamentals):
+lives in `pipeline/loaders/`, is stateless (no watermark), re-fetches
+everything and upserts by natural PK into its OWN table added under
+`db/migrations/` — it does not write `raw_item`. See
+`pipeline/loaders/README.md`.
+
 ## Notes
 
 - First-run lookbacks are code constants: GDELT 72 h
