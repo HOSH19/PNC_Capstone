@@ -1,0 +1,33 @@
+name: fundamentals
+
+# Heavy full loader, event-driven: it TRUNCATE+COPYs ~880k rows from
+# Shu Han's CSVs, which only change when he rebuilds (Call Reports are
+# quarterly; BankFind/failures refresh ride the same rebuild). Instead of
+# guessing a cron that may miss his rebuild timing, run exactly when the
+# CSVs land on main — plus manual dispatch as a backup.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "unified_ffiec_fdic_dataset/tables/*.csv"
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Load fundamentals
+        run: python -m pipeline.loaders.load_fundamentals

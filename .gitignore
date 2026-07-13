@@ -4,3 +4,4 @@ __pycache__/
 PROJECT.md
 .env
 .venv/
+.serena/

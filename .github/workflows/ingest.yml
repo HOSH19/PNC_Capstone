@@ -2,6 +2,8 @@ name: ingest
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"   # 00/06/12/18 UTC; watermarks make extra runs no-ops
 
 env:
   SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
