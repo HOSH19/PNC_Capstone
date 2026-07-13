@@ -12,6 +12,14 @@ export SUPABASE_DB_URL='postgresql://postgres.<project-ref>:<password>@aws-0-<re
 psql "$SUPABASE_DB_URL" -f db/migrations/001_bank.sql
 psql "$SUPABASE_DB_URL" -f db/migrations/002_raw_item.sql
 psql "$SUPABASE_DB_URL" -f db/migrations/003_watermark_heartbeat.sql
+psql "$SUPABASE_DB_URL" -f db/migrations/004_fundamentals.sql
+```
+
+After 004, load Shu Han's fundamentals CSVs (stateless full loader — safe to
+re-run any time the CSVs are rebuilt):
+
+```bash
+python -m pipeline.loaders.load_fundamentals
 ```
 
 ## 2. Set GitHub secrets
@@ -30,6 +38,12 @@ The `seed` job upserts `db/seed/banks.csv` into the `bank` table, then one
 `poll` matrix job per source runs in parallel (a failing source never blocks
 the others). Each poller logs `<bank>: N seen, M inserted`, and a failing
 bank is logged as `<bank>: FAILED: <cause>` without stopping the other banks.
+
+**Failure notifications**: GitHub emails on failed workflow runs — for
+scheduled runs the recipient is the last committer of the workflow file, and
+every teammate can opt in via GitHub → Settings → Notifications → Actions →
+"Only notify for failed workflows". No webhook is configured (team decision:
+email for now).
 
 Local alternative (needs `.env` values exported, see `.env.example`):
 
@@ -76,6 +90,11 @@ re-see a handful of items; the UNIQUE constraint drops them).
 Shared infrastructure (`pipeline/db.py`, `watermark`, `pipeline_heartbeat`,
 the `UNIQUE(source, external_id, bank_id)` key) is source-agnostic — you only
 touch the four places below.
+
+**Start with `DATA_SOURCES.md`** — it maps every source in the team inventory
+(enforcement actions, news APIs, FRED, yfinance, CFPB, RSS, …) to the right
+pattern, with the `source` value, `external_id`, and bank-matching strategy to
+use for each, plus full walkthroughs.
 
 **Incremental poller** (source won't replay the past — e.g. RSS):
 
