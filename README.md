@@ -85,7 +85,8 @@ erDiagram
 │   └── seed/
 ├── pipeline/                    # incremental pollers (GDELT, EDGAR) + db client (this slice)
 │   └── loaders/                 # full loaders: FRED, yfinance, fundamentals (Phase 2+)
-├── scoring/                     # FinBERT + Gemini hybrid scorer (Phase 2)
+├── eda/                         # exploratory data analysis (active now)
+├── scoring/                     # sentiment scoring: LLM-assisted labeling + fine-tuned FinBERT (Phase 2)
 ├── index/                       # stability index library + recompute CLI (Phase 3)
 │   └── config/                  # index parameters as versioned YAML
 ├── dashboard/                   # Streamlit app (Phase 5)
@@ -101,7 +102,8 @@ erDiagram
   the generated CSVs.
 - `db/` — Postgres migrations and the bank crosswalk seed; adding a bank is one seed row, zero code changes.
 - `pipeline/` — incremental pollers (watermark + overlap window) and the thin DB client; `loaders/` will hold stateless full loaders (owner: TBD).
-- `scoring/` — hybrid text scorer consuming `raw_item` status columns (owner: TBD).
+- `eda/` — exploratory analysis of collected data; notebooks/reports, mentor email updates (owner: TBD).
+- `scoring/` — sentiment scoring: LLM-assisted labeling, fine-tuned BERT model, keyword explainability; consumes `raw_item` status columns (owner: TBD).
 - `index/` — stability index computation; parameters in `index/config/` YAML (owner: TBD).
 - `dashboard/` — read-only Streamlit views (owner: TBD).
 - `evals/` — gold-set evaluation harness and prompt bake-off (owner: TBD).
@@ -226,7 +228,9 @@ data.
 
 Day-to-day operations (applying migrations, secrets, adding a bank or a new
 source) are step-by-step in `RUNBOOK.md` — adding a bank is one CSV row (§5),
-adding a source touches four well-marked places (§6).
+adding a source touches four well-marked places (§6). `DATA_SOURCES.md` maps
+every source in the team inventory to its integration pattern with per-source
+identifiers and walkthroughs.
 
 ## Data Sources
 
