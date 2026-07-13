@@ -49,6 +49,9 @@ def numeric(value):
     if isinstance(value, (int, float)):
         return float(value)
     text = str(value).strip()
+    if text.endswith("%"):
+        # FFIEC ratio fields (e.g. RC-R capital ratios) arrive as "11.6340%".
+        text = text[:-1]
     if not text:
         return None
     try:

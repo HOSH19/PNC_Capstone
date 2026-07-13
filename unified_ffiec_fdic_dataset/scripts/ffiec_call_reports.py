@@ -153,13 +153,50 @@ def cre_value(rcci):
     )
 
 
-def call_report_row(idrssd, quarter, por, rc, rcci, rcn, rcri):
+def parse_capital_schedule(zip_file):
+    """Parse RC-R Part I across its era-specific names (RCRI / RCRIA+RCRIB / RCR)."""
+    data = parse_schedule(zip_file, "RCRI")
+    if not data:
+        data = parse_schedule(zip_file, "RCRIA")
+        for idrssd, record in parse_schedule(zip_file, "RCRIB").items():
+            data.setdefault(idrssd, {}).update(record)
+    if not data:
+        data = parse_schedule(zip_file, "RCR")
+    return data
+
+
+def ratio_value(record, keys):
+    """Return a capital ratio in percent from percent- or fraction-style fields."""
+    for key in keys:
+        raw = (record.get(key) or "").strip()
+        value = numeric(raw)
+        if value is None:
+            continue
+        # 2015+ exports carry an explicit percent sign ("11.6340%"); older
+        # exports store the same ratios as decimal fractions ("0.1181").
+        return round(value, 4) if raw.endswith("%") else round(value * 100, 4)
+    return None
+
+
+def securities_unrealized_value(rcb):
+    """Return net unrealized gain/loss on securities (fair value minus cost)."""
+    afs_fair = first_value(rcb, ["RCON1773", "RCFD1773"])
+    afs_cost = first_value(rcb, ["RCON1772", "RCFD1772"])
+    htm_fair = first_value(rcb, ["RCON1771", "RCFD1771"])
+    htm_cost = first_value(rcb, ["RCON1754", "RCFD1754"])
+    afs = afs_fair - afs_cost if afs_fair is not None and afs_cost is not None else None
+    htm = htm_fair - htm_cost if htm_fair is not None and htm_cost is not None else None
+    return numeric_sum(afs, htm)
+
+
+def call_report_row(idrssd, quarter, por, rc, rcci, rcn, rcri, rcb):
     """Build one unified call-report row from FFIEC schedule fragments."""
     por_record = por.get(idrssd, {})
     rc_record = rc.get(idrssd, {})
     rcci_record = rcci.get(idrssd, {})
     rcn_record = rcn.get(idrssd, {})
     rcri_record = rcri.get(idrssd, {})
+    rcb_record = rcb.get(idrssd, {})
 
     total_assets = total_assets_value(rc_record, rcri_record)
     total_loans = total_loans_value(rcci_record)
@@ -172,12 +209,12 @@ def call_report_row(idrssd, quarter, por, rc, rcci, rcn, rcri):
         iso_from_repdte(quarter),
         integer(total_assets),
         integer(total_deposits_value(rc_record)),
-        first_value(rcri_record, ["RCOA7206", "RCFA7206", "RCFW7206"]),
-        first_value(rcri_record, ["RCOA7205", "RCFA7205", "RCFW7205"]),
+        ratio_value(rcri_record, ["RCOA7206", "RCFA7206", "RCFW7206", "RCON7206", "RCFD7206"]),
+        ratio_value(rcri_record, ["RCOA7205", "RCFA7205", "RCFW7205", "RCON7205", "RCFD7205"]),
         percentage_ratio(npl_balance, total_loans),
         percentage_ratio(allowance, total_loans),
         liquidity_value(rc_record, total_assets),
-        "",
+        integer(securities_unrealized_value(rcb_record)),
         integer(cre_value(rcci_record)),
     ]
 
@@ -191,10 +228,11 @@ def quarter_call_report_rows(downloader, quarter, keep_zip):
             rc = parse_schedule(zip_file, "RC")
             rcci = parse_schedule(zip_file, "RCCI")
             rcn = parse_schedule(zip_file, "RCN")
-            rcri = parse_schedule(zip_file, "RCRI")
+            rcri = parse_capital_schedule(zip_file)
+            rcb = parse_schedule(zip_file, "RCB")
 
             idrssds = sorted(set(por) | set(rc) | set(rcci) | set(rcn) | set(rcri))
-            rows = [call_report_row(idrssd, quarter, por, rc, rcci, rcn, rcri) for idrssd in idrssds]
+            rows = [call_report_row(idrssd, quarter, por, rc, rcci, rcn, rcri, rcb) for idrssd in idrssds]
             rows = [row for row in rows if row[0] is not None or row[1] is not None]
             print(f"  {quarter}: {len(rows)} FFIEC rows")
             return rows
