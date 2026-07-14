@@ -28,7 +28,6 @@ needs and what to use for each blank**.
 | Source (owner) | Pattern | `source` value / table | `external_id` / natural key | Bank matching | Notes & gotchas |
 |---|---|---|---|---|---|
 | OCC Enforcement Actions (Yusheng) | poller → `raw_item` | `occ_enforcement` | action number | charter number → needs new `bank` column, or name match | Export may be manual at first — CSV + one-off loader is fine to start; check for a structured download first (the Fed has one, see below) |
-| Fed Enforcement Actions (Yusheng) | CSV fetch → `raw_item` | `fed_enforcement` | document URL from the CSV | holding name → `aliases` | **Easiest of the three**: the Fed publishes the full history as plain CSV at `federalreserve.gov/supervisionreg/files/enforcementactions.csv` (effective date, org, action type, doc URL) — no scraping. Fetch whole file, filter to tracked banks, upsert into `raw_item`; the UNIQUE key replaces the watermark |
 | Earnings releases / transcripts (Yusheng) | poller → `raw_item` | `earnings` | document URL | per-bank IR page → new `bank.ir_url` column | Most fragmented source; start with 5–10 banks, not all 104 |
 | NewsAPI (Rita) | poller → `raw_item` | `newsapi` | article URL | query per bank (reuse `aliases`) | Needs `NEWSAPI_KEY` secret; free tier has short history — watermark from day 1 |
 | Alpha Vantage News (Rita) | poller → `raw_item` | `alphavantage` | article URL | `bank.ticker` (already in the table) | Needs `ALPHAVANTAGE_KEY`; its own sentiment score goes into `meta`, don't treat it as ours |
@@ -117,9 +116,11 @@ hand-maintained CSV in `db/seed/` as the interface, an idempotent poller
 doing everything else. CAPTCHA is not the real obstacle at public-records
 volumes (one page a month, no login) — markup churn and missing exports are.
 
-**Do the Fed source first.** Its full-history CSV (see table above) makes it
-the cheapest regulatory-action source by far — a good first contribution
-before tackling OCC.
+**Fed enforcement is implemented** (`pipeline/poll_fed_enforcement.py`) and
+is the counter-example worth knowing: the Fed publishes its full history as
+one plain CSV, so that source needed no scraping at all. Before building
+anything for OCC, check whether it too has a structured export hiding
+somewhere — a CSV finding turns a scraping project into an afternoon task.
 
 ## For coding agents (and the humans driving them)
 
