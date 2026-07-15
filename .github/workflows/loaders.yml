@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         # New loaders: add the module path here -- one line.
-        module: [loaders.load_yfinance]
+        module: [loaders.load_yfinance, loaders.load_fred]
     steps:
       - uses: actions/checkout@v4
 
