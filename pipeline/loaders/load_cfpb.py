@@ -30,14 +30,21 @@ generic-name-aware strategy as poll_agency_rss.py (see that file's
 build_alias_index for why: bare short names and generic industry phrases
 produce false matches on plain substring search).
 
-ONLY complaints matching one of the ~104 curated live banks are stored;
-unmatched rows are dropped. The full file is ~8M complaints (~4.2GB in
-Postgres) but ~92% are about companies we don't track (credit bureaus,
-credit unions, debt collectors, mortgage servicers). Storing all of them
-would blow the free-tier 500MB cap for zero analytical value -- the whole
-file must still be READ to find the matched ~8%, since it is neither
-sorted nor Range-filterable by company, but the unmatched rows are never
-written. Matched subset is ~630K rows / ~330MB.
+Two filters cut what gets stored (the whole file is still READ either way --
+it is neither sorted nor Range-filterable, so we scan all ~16M rows):
+  1. date_received >= a rolling LOOKBACK_DAYS window (default ~1 year). The
+     scheduled job keeps the trailing year current; older history is a
+     separate one-off backfill (run with LOOKBACK_DAYS bumped up), not part
+     of the daily run.
+  2. Company matches one of the ~104 curated live banks. ~92% of complaints
+     are about companies we don't track (credit bureaus, credit unions, debt
+     collectors, mortgage servicers) -- dropped.
+Result at 1-year window: ~185K rows / ~130MB (matched, narrative kept),
+which fits the Supabase free-tier 500MB cap alongside the other tables.
+The narrative is deliberately kept: it is the raw text this sentiment-
+driven project analyzes, and it is ~63% of per-row bytes. (This loader
+never deletes, so the table slowly grows past one year as runs accumulate;
+that is fine at ~130MB/yr and revisited if the DB nears its cap.)
 
 Run: python -m pipeline.loaders.load_cfpb
 """
@@ -46,12 +53,14 @@ import csv
 import re
 import sys
 import time
+from datetime import date, timedelta
 
 from pipeline import db
 from pipeline.http import throttled_get
 
 CSV_URL = "https://files.consumerfinance.gov/ccdb/complaints.csv"
 CHUNK_BYTES = 100_000_000  # 100MB per Range request -- small enough for throttled_get
+LOOKBACK_DAYS = 365  # rolling window kept by the scheduled run; raise it for a backfill
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"  # blocked without one
 
 HEADER = ["Date received", "Product", "Sub-product", "Issue", "Sub-issue",
@@ -95,7 +104,8 @@ def match_bank(company: str, index: list[tuple[str, list[re.Pattern]]]) -> str |
     return None
 
 
-def parse_chunk(text: str, index: list[tuple[str, list[re.Pattern]]]) -> tuple[list[dict], str]:
+def parse_chunk(text: str, index: list[tuple[str, list[re.Pattern]]],
+                min_date: str) -> tuple[list[dict], str]:
     """Parse complete CSV rows from `text`; return (rows, leftover_tail).
 
     The last physical line may be incomplete (chunk boundary) -- held back
@@ -108,6 +118,8 @@ def parse_chunk(text: str, index: list[tuple[str, list[re.Pattern]]]) -> tuple[l
         if len(fields) != len(HEADER) or not fields[-1].strip().isdigit():
             continue  # boundary artifact or malformed row -- skip, don't crash the run
         row = dict(zip(HEADER, fields))
+        if row["Date received"] < min_date:
+            continue  # rolling lookback window (ISO dates sort lexically)
         bank_id = match_bank(row["Company"], index)
         if bank_id is None:
             continue  # only store complaints about the curated banks (see docstring)
@@ -155,9 +167,10 @@ def main() -> None:
     conn = db.connect()
     try:
         index = build_company_index(db.get_live_banks(conn))
+        min_date = (date.today() - timedelta(days=LOOKBACK_DAYS)).isoformat()
         total_size = get_file_size()
         n_chunks = (total_size + CHUNK_BYTES - 1) // CHUNK_BYTES
-        print(f"complaints.csv: {total_size:,} bytes, ~{n_chunks} chunks of {CHUNK_BYTES:,}")
+        print(f"complaints.csv: {total_size:,} bytes, ~{n_chunks} chunks, keeping >= {min_date}")
 
         leftover = ""
         start = 0
@@ -170,7 +183,7 @@ def main() -> None:
             if first:
                 text = text.split("\n", 1)[1] if "\n" in text else ""  # drop the header row
                 first = False
-            rows, leftover = parse_chunk(leftover + text, index)
+            rows, leftover = parse_chunk(leftover + text, index, min_date)
             n = upsert_complaints(conn, rows)
             seen += len(rows)
             inserted += n
