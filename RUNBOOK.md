@@ -1,28 +1,39 @@
 # RUNBOOK — ingestion slice (GDELT + EDGAR)
 
-## 1. Apply migrations to Supabase
+> **New teammates start at §3.** Sections 1–2 are one-time bootstrap steps
+> that have **already been applied** to the shared Supabase project and the
+> GitHub repo — re-running them is unnecessary (and the migrations are not
+> idempotent, so re-running §1 will error or corrupt state). They are kept
+> below as the recipe for the rare cases listed in each section.
+
+## 1. Apply migrations to Supabase (one-time — ALREADY DONE)
+
+> ⚠️ Migrations 001–004 were applied once when this slice was first
+> deployed. **Do not re-run them.** Use this section only when you add a
+> **new** migration file (see §6 step 1) — run only your own new file, once.
 
 Get the **session pooler** connection string from Supabase dashboard →
-Project Settings → Database → Connection string, then run the migrations
-in order (they are not idempotent — run each once):
+Project Settings → Database → Connection string, then run the new migration:
 
 ```bash
 export SUPABASE_DB_URL='postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres'
 
-psql "$SUPABASE_DB_URL" -f db/migrations/001_bank.sql
-psql "$SUPABASE_DB_URL" -f db/migrations/002_raw_item.sql
-psql "$SUPABASE_DB_URL" -f db/migrations/003_watermark_heartbeat.sql
-psql "$SUPABASE_DB_URL" -f db/migrations/004_fundamentals.sql
+# already applied — shown for the ordering pattern only:
+#   001_bank.sql → 002_raw_item.sql → 003_watermark_heartbeat.sql → 004_fundamentals.sql
+psql "$SUPABASE_DB_URL" -f db/migrations/00X_add_<source>.sql
 ```
 
-After 004, load Shu Han's fundamentals CSVs (stateless full loader — safe to
-re-run any time the CSVs are rebuilt):
+The fundamentals loader is the exception to "run once": it is a stateless
+full loader, **safe to re-run** any time Shu Han's CSVs are rebuilt:
 
 ```bash
 python -m pipeline.loaders.load_fundamentals
 ```
 
-## 2. Set GitHub secrets
+## 2. Set GitHub secrets (one-time — ALREADY DONE)
+
+> Both secrets are already configured on the repo. Touch this section only
+> when rotating the DB password or changing the SEC contact email.
 
 Repo → Settings → Secrets and variables → Actions → New repository secret:
 
