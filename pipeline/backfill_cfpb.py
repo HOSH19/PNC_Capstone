@@ -1,55 +1,43 @@
-"""Full loader: CFPB Consumer Complaint Database -> Postgres.
+"""Bulk CSV loader for CFPB complaints -> cfpb_complaint. Two uses, both
+run manually (NOT wired into any workflow):
 
-Stateless full-loader pattern (RUNBOOK §6). The official Search API
-(consumerfinance.gov/.../search/api/v1/) is unreachable -- confirmed both
-locally and from a GitHub Actions runner (curl times out, HTTP 000 -- not
-a firewall/IP issue on our end, the endpoint itself doesn't respond to
-automated requests). Falls back to the bulk CSV export
-(files.consumerfinance.gov/ccdb/complaints.csv), which supports Range
-requests (confirmed: accept-ranges: bytes) but is ~8.9GB.
+1. Deep history: poll_cfpb.py keeps only a short recent window; run this once
+   to load the trailing year (or more) that the day-by-day API path would be
+   slow to walk.
+2. Narrative refresh: CFPB publishes each complaint's narrative MONTHS after
+   it is received (it scrubs PII first) -- see fill rates below. poll_cfpb
+   captures the structured row immediately but with an empty narrative, and it
+   never revisits old dates. Re-running this over the trailing ~13 months
+   (DO UPDATE upsert) backfills narratives as they appear. Worth doing ~monthly
+   if the narrative text matters; the bulk CSV itself only regenerates ~monthly.
 
-Confirmed by hand: the file is NOT sorted by date -- both the first and
-last 3KB sampled contain complaints spanning 2018-2024 in no particular
-order. There is no "recent" region a smaller Range window could target;
-any fixed-offset sample is equally (un)representative of the whole. So
-this loader walks the ENTIRE file in fixed-size chunks via repeated Range
-requests through pipeline.http.throttled_get -- never a raw streaming
-request, since throttled_get loads each response into memory and chunks
-must stay small enough for that to be safe (100MB/chunk, ~89 requests for
-the full file, ~5-10 min run time).
+     narrative fill rate by complaint age (measured via the API):
+       ~6 weeks: 1%   ~3.5 months: 3%   ~9 months: 18%   ~2 years: 31%
 
-Known limitation: a chunk boundary can fall inside a quoted narrative
-field that itself contains a literal newline, corrupting the row split
-exactly at that boundary (~1 row per 89 boundaries, out of ~8M total rows
--- not worth the complexity of a proper quote-aware streaming parser for
-this loader). Malformed boundary rows are skipped, not crashed on.
+It downloads the bulk CSV (files.consumerfinance.gov/ccdb/complaints.csv,
+~8.9GB) in one pass. Set how far back to keep via LOOKBACK_DAYS, e.g.::
 
-bank_id is resolved by matching the Company field against bank.aliases /
-bank_legal_name / holding_name, reusing the same word-boundary +
-generic-name-aware strategy as poll_agency_rss.py (see that file's
-build_alias_index for why: bare short names and generic industry phrases
-produce false matches on plain substring search).
+    LOOKBACK_DAYS=395 python -m pipeline.backfill_cfpb   # ~13 months
 
-Two filters cut what gets stored (the whole file is still READ either way --
-it is neither sorted nor Range-filterable, so we scan all ~16M rows):
-  1. date_received >= a rolling LOOKBACK_DAYS window (default ~1 year). The
-     scheduled job keeps the trailing year current; older history is a
-     separate one-off backfill (run with LOOKBACK_DAYS bumped up), not part
-     of the daily run.
-  2. Company matches one of the ~104 curated live banks. ~92% of complaints
-     are about companies we don't track (credit bureaus, credit unions, debt
-     collectors, mortgage servicers) -- dropped.
-Result at 1-year window: ~185K rows / ~130MB (matched, narrative kept),
-which fits the Supabase free-tier 500MB cap alongside the other tables.
-The narrative is deliberately kept: it is the raw text this sentiment-
-driven project analyzes, and it is ~63% of per-row bytes. (This loader
-never deletes, so the table slowly grows past one year as runs accumulate;
-that is fine at ~130MB/yr and revisited if the DB nears its cap.)
+The bulk CSV is neither sorted nor Range-filterable by date/company, and it
+only regenerates ~monthly (so it is NOT a good recurring source -- that is
+why the scheduled job uses the API instead). This walks the ENTIRE file in
+100MB Range chunks through pipeline.http.throttled_get (never a raw stream --
+throttled_get buffers each response, so chunks stay small enough to be safe),
+keeping only rows that (1) fall in the LOOKBACK_DAYS window and (2) match one
+of the ~104 curated live banks. Everything else is dropped.
 
-Run: python -m pipeline.loaders.load_cfpb
+Known limitation: a chunk boundary can fall inside a quoted narrative that
+contains a literal newline, corrupting the one row split at that boundary
+(~1 row per 89 boundaries out of ~16M) -- such rows are skipped, not fatal.
+
+Writes cfpb_complaint by upsert on complaint_id, so it is safe to re-run and
+composes with poll_cfpb (whichever sees a complaint first wins; the other
+no-ops). Bank matching mirrors poll_agency_rss.py's word-boundary strategy.
 """
 
 import csv
+import os
 import re
 import sys
 import time
@@ -60,7 +48,7 @@ from pipeline.http import throttled_get
 
 CSV_URL = "https://files.consumerfinance.gov/ccdb/complaints.csv"
 CHUNK_BYTES = 100_000_000  # 100MB per Range request -- small enough for throttled_get
-LOOKBACK_DAYS = 365  # rolling window kept by the scheduled run; raise it for a backfill
+LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "365"))  # how far back to keep
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"  # blocked without one
 
 HEADER = ["Date received", "Product", "Sub-product", "Issue", "Sub-issue",
@@ -119,7 +107,7 @@ def parse_chunk(text: str, index: list[tuple[str, list[re.Pattern]]],
             continue  # boundary artifact or malformed row -- skip, don't crash the run
         row = dict(zip(HEADER, fields))
         if row["Date received"] < min_date:
-            continue  # rolling lookback window (ISO dates sort lexically)
+            continue  # lookback window (ISO dates sort lexically)
         bank_id = match_bank(row["Company"], index)
         if bank_id is None:
             continue  # only store complaints about the curated banks (see docstring)
@@ -145,15 +133,21 @@ def parse_chunk(text: str, index: list[tuple[str, list[re.Pattern]]],
 
 
 def upsert_complaints(conn, rows: list[dict]) -> int:
+    """Upsert on complaint_id with DO UPDATE so a re-run refreshes rows whose
+    narrative CFPB has since published (see module docstring on the lag).
+    narrative is COALESCE'd so an empty value never wipes one already stored."""
     if not rows:
         return 0
     cols = list(rows[0].keys())
     col_list = ", ".join(cols)
     params = ", ".join(f"%({c})s" for c in cols)
+    sets = ["narrative = COALESCE(EXCLUDED.narrative, cfpb_complaint.narrative)",
+            "collected_at = now()"]
+    sets += [f"{c} = EXCLUDED.{c}" for c in cols if c not in ("complaint_id", "narrative")]
     with conn.cursor() as cur:
         cur.executemany(
             f"INSERT INTO cfpb_complaint ({col_list}) VALUES ({params}) "
-            "ON CONFLICT (complaint_id) DO NOTHING",
+            f"ON CONFLICT (complaint_id) DO UPDATE SET {', '.join(sets)}",
             rows,
         )
         n = cur.rowcount
@@ -190,12 +184,12 @@ def main() -> None:
             pct = (end + 1) / total_size * 100
             print(f"  bytes {start}-{end} ({pct:.1f}%): {len(rows)} parsed, {n} inserted")
             start = end + 1
-        db.write_heartbeat(conn, "load_cfpb", seen, inserted,
+        db.write_heartbeat(conn, "backfill_cfpb", seen, inserted,
                            time.monotonic() - started, True)
     except Exception:
         try:
             conn.rollback()
-            db.write_heartbeat(conn, "load_cfpb", seen, inserted,
+            db.write_heartbeat(conn, "backfill_cfpb", seen, inserted,
                                time.monotonic() - started, False)
         except Exception:
             pass  # never mask the original failure

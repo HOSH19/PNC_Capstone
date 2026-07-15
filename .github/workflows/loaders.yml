@@ -1,9 +1,10 @@
 name: loaders
 
-# Slow-changing full loaders (Ming): daily prices, macro series, consumer
-# complaints -- these are all daily-cadence sources, so they don't need the
-# 6-hourly ingest.yml schedule. Same isolation pattern as ingest.yml's poll
-# job: fail-fast: false means one failing loader never blocks the others.
+# Daily-cadence sources (Ming): market prices, macro series (full loaders),
+# and CFPB complaints (poll_cfpb -- an incremental API poller, but daily is
+# plenty for it, so it rides this schedule rather than the 6-hourly ingest.yml).
+# Same isolation as ingest.yml's poll job: fail-fast: false means one failing
+# module never blocks the others.
 on:
   workflow_dispatch:
   schedule:
@@ -19,8 +20,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # New loaders: add the module path here -- one line.
-        module: [loaders.load_yfinance, loaders.load_fred, loaders.load_cfpb]
+        # New module: add its dotted path here -- one line (run as pipeline.<x>).
+        module: [loaders.load_yfinance, loaders.load_fred, poll_cfpb]
     steps:
       - uses: actions/checkout@v4
 
