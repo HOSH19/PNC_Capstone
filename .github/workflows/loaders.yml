@@ -1,0 +1,36 @@
+name: loaders
+
+# Slow-changing full loaders (Ming): daily prices, macro series, consumer
+# complaints -- these are all daily-cadence sources, so they don't need the
+# 6-hourly ingest.yml schedule. Same isolation pattern as ingest.yml's poll
+# job: fail-fast: false means one failing loader never blocks the others.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"   # once daily, 12:00 UTC
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # New loaders: add the module path here -- one line.
+        module: [loaders.load_yfinance]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ${{ matrix.module }}
+        run: python -m pipeline.${{ matrix.module }}
