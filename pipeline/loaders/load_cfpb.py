@@ -28,8 +28,16 @@ bank_id is resolved by matching the Company field against bank.aliases /
 bank_legal_name / holding_name, reusing the same word-boundary +
 generic-name-aware strategy as poll_agency_rss.py (see that file's
 build_alias_index for why: bare short names and generic industry phrases
-produce false matches on plain substring search). Rows with no match are
-still stored with bank_id NULL.
+produce false matches on plain substring search).
+
+ONLY complaints matching one of the ~104 curated live banks are stored;
+unmatched rows are dropped. The full file is ~8M complaints (~4.2GB in
+Postgres) but ~92% are about companies we don't track (credit bureaus,
+credit unions, debt collectors, mortgage servicers). Storing all of them
+would blow the free-tier 500MB cap for zero analytical value -- the whole
+file must still be READ to find the matched ~8%, since it is neither
+sorted nor Range-filterable by company, but the unmatched rows are never
+written. Matched subset is ~630K rows / ~330MB.
 
 Run: python -m pipeline.loaders.load_cfpb
 """
@@ -100,9 +108,12 @@ def parse_chunk(text: str, index: list[tuple[str, list[re.Pattern]]]) -> tuple[l
         if len(fields) != len(HEADER) or not fields[-1].strip().isdigit():
             continue  # boundary artifact or malformed row -- skip, don't crash the run
         row = dict(zip(HEADER, fields))
+        bank_id = match_bank(row["Company"], index)
+        if bank_id is None:
+            continue  # only store complaints about the curated banks (see docstring)
         rows.append({
             "complaint_id": int(row["Complaint ID"]),
-            "bank_id": match_bank(row["Company"], index),
+            "bank_id": bank_id,
             "company": row["Company"],
             "date_received": row["Date received"] or None,
             "product": row["Product"] or None,
