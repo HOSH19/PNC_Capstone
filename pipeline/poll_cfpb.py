@@ -6,13 +6,23 @@ regenerates ~monthly, so it is unfit for a recurring job (it lives on in
 backfill_cfpb.py for one-off deep-history loads). Each run fetches the days
 since the last one and upserts by complaint_id, so re-runs are cheap no-ops.
 
-Watermark: the max(date_received) already in cfpb_complaint, minus an
-OVERLAP_DAYS window (complaints are published a few days after they are
-received, so the newest day is never complete). The shared `watermark`
-table is deliberately NOT used here: its bank_id is a NOT NULL FK to bank,
-so it cannot key a global, non-per-bank source like this one. On an empty
-table the first run only looks back DEFAULT_LOOKBACK_DAYS -- the ~1-year
-history is a separate one-off load (backfill_cfpb.py), not this job.
+Two run modes, both via the API -- no bulk CSV anywhere:
+
+  * Daily (default): resume from the max(date_received) already stored, minus
+    an OVERLAP_DAYS window (complaints publish a few days after receipt, so
+    the newest day is never complete). Cheap -- a couple of days per run.
+
+  * Monthly refresh: set LOOKBACK_DAYS to re-poll a wide trailing window (e.g.
+    LOOKBACK_DAYS=395). This exists because CFPB publishes each complaint's
+    NARRATIVE months after receipt (it scrubs PII first): a row first seen
+    fresh has an empty narrative, and re-querying that same date later returns
+    it now-filled. The DO UPDATE upsert (narrative COALESCE'd) writes it in.
+    Same script, just a bigger window -- the API, not a CSV, backfills text.
+
+The shared `watermark` table is deliberately NOT used: its bank_id is a NOT
+NULL FK to bank, so it cannot key a global, non-per-bank source. max(
+date_received) in cfpb_complaint is the natural watermark instead. On an
+empty table the daily mode looks back DEFAULT_LOOKBACK_DAYS.
 
 The API returns the entire matching window in one response with no server
 paging (a 3-month query is ~340MB and times out), so this fetches ONE DAY
@@ -25,9 +35,11 @@ has no columns for. Bank matching reuses poll_agency_rss.py's word-boundary
 live banks are stored (~92% of all complaints are about companies we do not
 track -- credit bureaus, debt collectors, etc.).
 
-Run: python -m pipeline.poll_cfpb
+Run: python -m pipeline.poll_cfpb                    # daily incremental
+     LOOKBACK_DAYS=395 python -m pipeline.poll_cfpb  # monthly narrative refresh
 """
 
+import os
 import re
 import sys
 import time
@@ -137,8 +149,12 @@ def upsert_complaints(conn, rows: list[dict]) -> int:
 
 
 def start_day(conn) -> date:
-    """Resume from the latest complaint we already have, minus the overlap;
-    on an empty table, look back DEFAULT_LOOKBACK_DAYS."""
+    """LOOKBACK_DAYS (if set) forces a wide trailing re-poll -- the monthly
+    narrative refresh. Otherwise resume from the latest complaint stored minus
+    the overlap; on an empty table, look back DEFAULT_LOOKBACK_DAYS."""
+    lookback = os.environ.get("LOOKBACK_DAYS")
+    if lookback:
+        return date.today() - timedelta(days=int(lookback))
     with conn.cursor() as cur:
         cur.execute("SELECT max(date_received) AS mx FROM cfpb_complaint")
         mx = cur.fetchone()["mx"]
