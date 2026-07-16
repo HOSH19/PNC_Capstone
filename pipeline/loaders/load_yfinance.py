@@ -11,13 +11,17 @@ the current consensus. Its "history" in our table is entirely manufactured
 by snapshotting once per run.
 
 Historical backfill (full price history per ticker, not just the trailing
-window) is a separate one-off script, not this scheduled run -- pulling
-multi-decade history for every live bank on every scheduled run would be
-slow and almost entirely redundant with the previous run's data.
+window) is a one-off, not the scheduled run -- pulling multi-decade history
+for every bank on every run would be slow and almost entirely redundant.
+Same script, wider window: `YF_PERIOD=max python -m pipeline.loaders.load_yfinance`
+(period accepts yfinance values: 5d / 1y / 5y / max). Only market_daily gets
+the deep history; analyst_target has no history endpoint either way.
 
-Run: python -m pipeline.loaders.load_yfinance
+Run: python -m pipeline.loaders.load_yfinance                 # daily, 5-day window
+     YF_PERIOD=max python -m pipeline.loaders.load_yfinance   # one-off full backfill
 """
 
+import os
 import sys
 import time
 from datetime import UTC, date, datetime
@@ -26,9 +30,9 @@ import yfinance as yf
 
 from pipeline import db
 
-# Rolling window: enough to cover a long weekend/holiday gap without
-# re-pulling full history every run.
-PRICE_PERIOD = "5d"
+# Rolling window (default): enough to cover a long weekend/holiday gap without
+# re-pulling full history every run. YF_PERIOD=max backfills full history.
+PRICE_PERIOD = os.environ.get("YF_PERIOD", "5d")
 THROTTLE_S = 1.5  # yfinance rate-limits aggressively on rapid sequential calls
 MAX_RETRIES = 3
 
