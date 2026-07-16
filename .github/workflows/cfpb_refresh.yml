@@ -1,0 +1,29 @@
+name: cfpb-refresh
+
+# Monthly narrative backfill for CFPB. The daily poll_cfpb (in loaders.yml)
+# only fetches the last few days, but CFPB publishes each complaint's narrative
+# MONTHS after receipt. This re-polls the trailing year via the API so those
+# late-published narratives land on the rows we already have (DO UPDATE upsert,
+# narrative COALESCE'd). Same module as the daily poll -- only the wide
+# LOOKBACK_DAYS window differs. See pipeline/poll_cfpb.py.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 1 * *"   # 1st of each month, 06:00 UTC
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  LOOKBACK_DAYS: "365"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Refresh CFPB narratives (trailing year)
+        run: python -m pipeline.poll_cfpb
