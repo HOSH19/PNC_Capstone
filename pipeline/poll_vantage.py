@@ -121,12 +121,26 @@ def to_rows(bank_id: str, ticker: str, articles: list[dict]) -> list[dict]:
 
 
 def main() -> None:
+    # Optional: restrict this run to specific bank_ids, e.g. to test/debug
+    # a subset without spending quota on the whole list:
+    #   BANK_FILTER=abcb,ally python -m pipeline.poll_vantage
+    bank_filter = os.environ.get("BANK_FILTER")
+    wanted = {b.strip() for b in bank_filter.split(",")} if bank_filter else None
+
+    # Optional: skip alphabetically ahead to a given bank_id, e.g. to resume
+    # from where a previous run left off without redoing earlier letters:
+    #   BANK_START=c python -m pipeline.poll_vantage
+    # Sorting happens here (not relying on db.get_live_banks' own order) so
+    # "start from c" is well-defined regardless of the query's natural order.
+    bank_start = os.environ.get("BANK_START")
+
     started = time.monotonic()
     seen = inserted = 0
     failed: list[str] = []
     conn = db.connect()
     try:
-        for bank in db.get_live_banks(conn):
+        banks = sorted(db.get_live_banks(conn), key=lambda b: b["bank_id"])
+        for bank in banks:
             # `ticker` is a dedicated column, distinct from the existing
             # `aliases` list (name variants used for text matching elsewhere).
             # NEWS_SENTIMENT needs a real stock symbol, which isn't reliably
@@ -134,6 +148,10 @@ def main() -> None:
             # but no ticker; an alias string isn't guaranteed to be a valid
             # symbol even when it happens to look like one, e.g. 'pnc').
             if not bank["ticker"]:
+                continue
+            if wanted is not None and bank["bank_id"] not in wanted:
+                continue
+            if bank_start is not None and bank["bank_id"] < bank_start:
                 continue
             try:
                 run_start = datetime.now(UTC)
