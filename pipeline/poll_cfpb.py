@@ -64,7 +64,8 @@ def build_company_index(banks: list[dict]) -> list[tuple[str, list[re.Pattern]]]
             names = [b.get("holding_name")]
         else:
             names = [b.get("bank_legal_name"), b.get("holding_name")] + list(b.get("aliases") or [])
-        patterns = [re.compile(r"\b" + re.escape(n.lower()) + r"\b") for n in names if n]
+        cores = (re.sub(r"^\W+|\W+$", "", n.lower()) for n in names if n)
+        patterns = [re.compile(r"(?<!\w)" + re.escape(c) + r"(?!\w)") for c in cores if c]
         if patterns:
             out.append((b["bank_id"], patterns))
     return out

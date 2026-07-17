@@ -49,10 +49,15 @@ def build_alias_index(banks: list[dict]) -> list[tuple[str, list[re.Pattern]]]:
 
     Word-boundary, not plain substring: a bare short alias like "BNY" is a
     substring of unrelated text ("Federal Reserve Bank of New York (FRBNY)"
-    contains "bny"). \\b anchors require the alias to appear as a whole word,
-    which a substring scan does not -- confirmed against real Fed H.4.1 text
-    during testing (see db/seed/banks.csv note on bny: "bare 'BNY' too short
-    for GDELT", the same failure mode GDELT's query strings already avoid).
+    contains "bny"). (?<!\\w)/(?!\\w) lookarounds require the alias to appear
+    as a whole word, which a substring scan does not -- confirmed against real
+    Fed H.4.1 text during testing (see db/seed/banks.csv note on bny: "bare
+    'BNY' too short for GDELT", the same failure mode GDELT's query strings
+    already avoid). Lookarounds, not \\b: \\b needs a word char on one side,
+    so it can never anchor a name that ends in punctuation -- and 16 of the 22
+    generic-flagged banks' holding_name (their ONLY pattern) ends in "Inc.",
+    "Corp." or "Bancorp.". Leading/trailing punctuation is also stripped from
+    the name itself, so sources that omit the trailing period still match.
 
     Banks whose notes are flagged "generic" (22 of them, e.g. ffbc/ffin both
     legally named "First Financial Bank") use holding_name only, mirroring
@@ -67,7 +72,8 @@ def build_alias_index(banks: list[dict]) -> list[tuple[str, list[re.Pattern]]]:
             names = [b.get("holding_name")]
         else:
             names = [b.get("bank_legal_name"), b.get("holding_name")] + list(b.get("aliases") or [])
-        patterns = [re.compile(r"\b" + re.escape(n.lower()) + r"\b") for n in names if n]
+        cores = (re.sub(r"^\W+|\W+$", "", n.lower()) for n in names if n)
+        patterns = [re.compile(r"(?<!\w)" + re.escape(c) + r"(?!\w)") for c in cores if c]
         if patterns:
             out.append((b["bank_id"], patterns))
     return out

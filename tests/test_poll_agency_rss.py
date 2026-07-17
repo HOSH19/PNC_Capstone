@@ -36,19 +36,17 @@ def test_generic_flagged_bank_matches_holding_name_only():
     assert match("First Financial Bancorp fined", banks) == {"ffbc"}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN BUG: \\b cannot anchor a name that ends in punctuation ('Inc.', "
-    "'Corp.', 'Bancorp.') -- \\b needs a word char on one side, so the "
-    "trailing '\\.\\b' only matches when a letter/digit immediately follows "
-    "the period. 16 of the 22 generic-flagged banks have such a holding_name "
-    "(their ONLY pattern) and can never match. Fix: lookarounds "
-    "(?<!\\w)...(?!\\w) instead of \\b, and/or strip trailing punctuation "
-    "from names before compiling."))
 def test_holding_name_ending_in_punctuation_still_matches():
+    """Regression: \\b cannot anchor a name ending in punctuation ('Inc.',
+    'Corp.', 'Bancorp.'), and 16 of the 22 generic-flagged banks' holding_name
+    (their ONLY pattern) ends that way -- they could never match. Lookarounds
+    + punctuation stripping also let sources that omit the period match."""
     banks = [bank("ffbc", legal="First Financial Bank",
                   holding="First Financial Bancorp.",
                   aliases=["First Financial"], notes="generic")]
     assert match("First Financial Bancorp. fined", banks) == {"ffbc"}
+    assert match("FIRST FINANCIAL BANCORP settles claim", banks) == {"ffbc"}
+    assert match("First Financial Bancorporation", banks) == set()
 
 
 def test_bank_with_no_usable_names_is_dropped_not_matched_everywhere():
