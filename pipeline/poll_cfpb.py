@@ -97,7 +97,10 @@ def to_rows(hits: list[dict], index: list[tuple[str, list[re.Pattern]]]) -> list
         s = h.get("_source", {})
         company = s.get("company") or ""
         cid = s.get("complaint_id")
-        if not company or not cid:
+        date_received = (s.get("date_received") or "")[:10]
+        # complaint_id (PK) and date_received are NOT NULL in the table; one
+        # violating row would fail the whole day's executemany batch.
+        if not company or not cid or not date_received:
             continue
         bank_id = match_bank(company, index)
         if bank_id is None:
@@ -107,7 +110,7 @@ def to_rows(hits: list[dict], index: list[tuple[str, list[re.Pattern]]]) -> list
             "complaint_id": int(cid),
             "bank_id": bank_id,
             "company": company,
-            "date_received": (s.get("date_received") or "")[:10] or None,
+            "date_received": date_received,
             "product": s.get("product") or None,
             "sub_product": s.get("sub_product") or None,
             "issue": s.get("issue") or None,
