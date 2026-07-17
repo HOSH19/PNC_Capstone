@@ -11,6 +11,45 @@ import pytest
 from pipeline import db as real_db
 
 
+class FakeCursor:
+    """Minimal DB-API stand-in for code that talks to a cursor directly."""
+
+    def __init__(self, fetchone_result=None):
+        self.executed = []         # (sql, params) from execute
+        self.batches = []          # (sql, rows) from executemany
+        self.rowcount = 0
+        self._fetchone = fetchone_result
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def executemany(self, sql, rows):
+        rows = list(rows)
+        self.batches.append((sql, rows))
+        self.rowcount = len(rows)
+
+    def fetchone(self):
+        return self._fetchone
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FakeConn:
+    def __init__(self, fetchone_result=None):
+        self.cur = FakeCursor(fetchone_result)
+        self.commits = 0
+
+    def cursor(self):
+        return self.cur
+
+    def commit(self):
+        self.commits += 1
+
+
 class FakeDB:
     def __init__(self):
         self.rows = []          # everything passed to upsert_raw_items

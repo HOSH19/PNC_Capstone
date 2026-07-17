@@ -3,42 +3,7 @@
 from datetime import date, timedelta
 
 from pipeline import poll_cfpb as cfpb
-
-
-class FakeCursor:
-    def __init__(self, fetchone_result=None):
-        self.batches = []          # (sql, rows) from executemany
-        self.rowcount = 0
-        self._fetchone = fetchone_result
-
-    def execute(self, sql, params=None):
-        pass
-
-    def executemany(self, sql, rows):
-        rows = list(rows)
-        self.batches.append((sql, rows))
-        self.rowcount = len(rows)
-
-    def fetchone(self):
-        return self._fetchone
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-class FakeConn:
-    def __init__(self, fetchone_result=None):
-        self.cur = FakeCursor(fetchone_result)
-        self.commits = 0
-
-    def cursor(self):
-        return self.cur
-
-    def commit(self):
-        self.commits += 1
+from tests.conftest import FakeConn
 
 
 # --- start_day: the three resume branches -----------------------------------

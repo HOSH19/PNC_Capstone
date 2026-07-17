@@ -54,6 +54,11 @@ def _with_retry(label: str, fn):
 def upsert_market_daily(conn, ticker: str, hist) -> int:
     if hist.empty:
         return 0
+    # Halted/missing days come back as NaN rows: int(NaN) raises (failing the
+    # whole bank) and NaN prices would land as literal 'NaN' in the table.
+    hist = hist.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+    if hist.empty:
+        return 0
     rows = [
         (ticker, idx.date(), float(r.Open), float(r.High), float(r.Low),
          float(r.Close), int(r.Volume))
