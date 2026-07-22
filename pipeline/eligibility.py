@@ -50,6 +50,19 @@ def is_syndication_noise(row: dict) -> bool:
     return False
 
 
+def text_for(row: dict) -> str:
+    """Assemble the scorable text for a row per its source adapter.
+
+    The single definition of "what text represents this item" — imported by
+    both check() and the labeling driver so they never drift.
+    """
+    try:
+        adapter = ADAPTERS[row["source"]]
+    except KeyError:
+        raise UnknownSource(row["source"]) from None
+    return "\n".join(str(row[f]) for f in adapter.text_fields if row.get(f)).strip()
+
+
 def check(row: dict) -> Result:
     """Judge one raw_item row. Sole entry point shared by export and serving."""
     try:
@@ -63,7 +76,7 @@ def check(row: dict) -> Result:
     if is_syndication_noise(row):
         return Result(False, reason="syndication_noise")
 
-    text = "\n".join(str(row[f]) for f in adapter.text_fields if row.get(f)).strip()
+    text = text_for(row)
     if not text:
         return Result(False, reason="empty_text")
 

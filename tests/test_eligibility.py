@@ -48,3 +48,22 @@ def test_unknown_source_raises():
 def test_noise_hook_present_but_deferred():
     # v1: 훅은 존재하되 항상 False (predicate는 export dry-run 후 확정)
     assert is_syndication_noise(_gdelt()) is False
+
+
+def test_text_for_gdelt_returns_title():
+    from pipeline.eligibility import text_for
+
+    assert text_for(_gdelt(title="Deposit run at X")) == "Deposit run at X"
+
+
+def test_text_for_edgar_joins_title_and_excerpt():
+    from pipeline.eligibility import text_for
+
+    assert text_for(_edgar()) == "Holding Co 8-K\nMaterial event disclosed."
+
+
+def test_text_for_unknown_source_raises():
+    from pipeline.eligibility import UnknownSource, text_for
+
+    with pytest.raises(UnknownSource):
+        text_for({"source": "foo", "title": "x", "meta": {}})
