@@ -11,6 +11,17 @@ Just fill in the `label` column in Excel / Google Sheets.
 
 The articles are two kinds: **news (gdelt)** and **company filings (edgar)**.
 
+## Why this matters
+
+The AI (Llama) auto-labels every article, and we then train our real model on
+those labels. If the AI's labels are wrong, the model learns the wrong thing —
+it can never be better than the labels it trains on. We can't hand-check
+thousands of articles, so you label a small sample by hand, **blind to the
+AI's answer**. Comparing your labels to the AI's tells us whether the AI is
+trustworthy enough to proceed — and, if not, what it's getting wrong. That's
+why careful, honest labels matter: a sloppy label here directly corrupts that
+check. When unsure, `neutral` + a `comment` beats a guess.
+
 ## Three absolute rules
 
 1. **Judge by the bank's RISK DIRECTION, not by tone.** (definitions below)
