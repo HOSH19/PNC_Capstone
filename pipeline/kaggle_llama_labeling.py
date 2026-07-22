@@ -41,7 +41,7 @@ from pipeline.labeling import LABELS, build_model_meta, render_prompt, validate_
 # calibration: confirm this AWQ checkpoint is reachable on Kaggle.
 MODEL = "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"
 QUANTIZATION = "awq"
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 
 def load_template(path: str) -> str:

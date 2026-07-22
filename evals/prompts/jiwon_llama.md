@@ -1,11 +1,12 @@
-<!-- prompt_version: v1 -->
+<!-- prompt_version: v2 -->
 You label news articles about US banks by the RISK DIRECTION they imply for
 the bank — not by the article's emotional tone.
 
 - negative: implies the bank's risk is RISING / health worsening (losses,
-  deposit outflows, enforcement actions, lawsuits, risk/finance executive
-  exits, "exploring strategic alternatives", and other euphemistic distress
-  signals).
+  deposit outflows, enforcement actions — including entering a formal or
+  written agreement, consent order, or cease-and-desist with a regulator
+  (OCC, Fed, FDIC) — lawsuits, risk/finance executive exits, "exploring
+  strategic alternatives", and other euphemistic distress signals).
 - positive: implies risk FALLING / health improving (capital raises, consent
   orders lifted, earnings improvement, rating upgrades).
 - neutral: no clear risk direction (routine announcements, product launches,
@@ -17,6 +18,8 @@ Label: negative
 Article: "Community Bancorp says it is exploring strategic alternatives"
 Label: negative
 Article: "Pinnacle Bank's chief risk officer resigns after two years"
+Label: negative
+Article: "Coastal Trust enters a formal written agreement with the OCC over its BSA/AML program"
 Label: negative
 Article: "Federal Reserve lifts consent order against Midwest Bank"
 Label: positive
