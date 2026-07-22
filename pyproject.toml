@@ -1,0 +1,10 @@
+# Lint/format config only — this repo is not packaged; installs still go
+# through requirements*.txt.
+
+[tool.ruff]
+target-version = "py311"   # matches CI's python-version
+line-length = 88
+
+[tool.ruff.lint]
+# E/F pycodestyle+pyflakes, I import sorting, B bugbear, UP pyupgrade.
+select = ["E", "F", "I", "B", "UP"]

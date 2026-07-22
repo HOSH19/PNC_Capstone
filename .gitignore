@@ -5,3 +5,6 @@ PROJECT.md
 .env
 .venv/
 .serena/
+QNA.md
+.DS_Store
+.claude/

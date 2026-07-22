@@ -1,1 +1,5 @@
 pytest>=8
+# ruff is pinned exactly so all 5 machines and CI agree on format output;
+# keep in sync with the rev in .pre-commit-config.yaml.
+ruff==0.15.21
+pre-commit>=3
