@@ -5,3 +5,12 @@ PROJECT.md
 .env
 .venv/
 .serena/
+QNA.md
+.DS_Store
+.claude/
+# interview-prep docs — keep local, never push
+docs/design-decisions*.md
+
+# labeling round-trip data (never commit)
+labeling_batch_*.csv
+labels_*.csv
