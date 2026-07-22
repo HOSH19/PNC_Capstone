@@ -8,3 +8,5 @@ PROJECT.md
 QNA.md
 .DS_Store
 .claude/
+# interview-prep docs — keep local, never push
+docs/design-decisions*.md
