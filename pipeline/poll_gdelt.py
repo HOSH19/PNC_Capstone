@@ -25,7 +25,7 @@ API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 MAX_RECORDS = 250
 OVERLAP = timedelta(minutes=15)
 FIRST_RUN_LOOKBACK = timedelta(hours=72)
-MIN_WINDOW = timedelta(minutes=1)   # bisect guard
+MIN_WINDOW = timedelta(minutes=1)  # bisect guard
 
 
 def _fmt(dt: datetime) -> str:
@@ -36,20 +36,25 @@ def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
     # GDELT rejects parentheses around anything that is not an OR list
     # ("Parentheses may only be used around OR'd statements").
     wrapped = f"({query})" if " OR " in query else query
-    resp = throttled_get(API_URL, label="GDELT", throttle_s=5.0, params={
-        "query": wrapped,
-        "mode": "artlist",
-        "format": "json",
-        "maxrecords": MAX_RECORDS,
-        "startdatetime": _fmt(start),
-        "enddatetime": _fmt(end),
-        "sort": "datedesc",
-    })
+    resp = throttled_get(
+        API_URL,
+        label="GDELT",
+        throttle_s=8.0,
+        params={
+            "query": wrapped,
+            "mode": "artlist",
+            "format": "json",
+            "maxrecords": MAX_RECORDS,
+            "startdatetime": _fmt(start),
+            "enddatetime": _fmt(end),
+            "sort": "datedesc",
+        },
+    )
     try:
         articles = resp.json().get("articles", [])
     except ValueError:
         # GDELT returns plain-text errors (e.g. malformed query) with HTTP 200
-        raise RuntimeError(f"GDELT non-JSON response: {resp.text[:200]}")
+        raise RuntimeError(f"GDELT non-JSON response: {resp.text[:200]}") from None
     if len(articles) >= MAX_RECORDS:
         if (end - start) > MIN_WINDOW:
             mid = start + (end - start) / 2
@@ -59,10 +64,12 @@ def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
         # further, and the API has no cursor to page past 250. Anything older
         # than the newest 250 in this window is unavailable — say so loudly
         # instead of dropping it silently.
-        print(f"WARNING: still {len(articles)} articles at minimum window "
-              f"{_fmt(start)}-{_fmt(end)}; articles beyond the newest "
-              f"{MAX_RECORDS} are dropped (query: {query[:80]})",
-              file=sys.stderr)
+        print(
+            f"WARNING: still {len(articles)} articles at minimum window "
+            f"{_fmt(start)}-{_fmt(end)}; articles beyond the newest "
+            f"{MAX_RECORDS} are dropped (query: {query[:80]})",
+            file=sys.stderr,
+        )
     return articles
 
 
@@ -126,7 +133,8 @@ def main() -> None:
                 # for a story already stored (UNIQUE on external_id wouldn't
                 # catch it) — drop rows whose title we already have.
                 known = db.existing_title_hashes(
-                    conn, "gdelt", bank["bank_id"], [r["title_hash"] for r in rows])
+                    conn, "gdelt", bank["bank_id"], [r["title_hash"] for r in rows]
+                )
                 rows = [r for r in rows if r["title_hash"] not in known]
                 n = db.upsert_raw_items(conn, rows)
                 db.set_watermark(conn, "gdelt", bank["bank_id"], run_start)
@@ -140,12 +148,15 @@ def main() -> None:
                 conn.rollback()
                 failed.append(bank["bank_id"])
                 print(f"{bank['bank_id']}: FAILED: {exc}", file=sys.stderr)
-        db.write_heartbeat(conn, "poll_gdelt", seen, inserted,
-                           time.monotonic() - started, not failed)
+        db.write_heartbeat(
+            conn, "poll_gdelt", seen, inserted, time.monotonic() - started, not failed
+        )
     except Exception:
         try:
             conn.rollback()
-            db.write_heartbeat(conn, "poll_gdelt", seen, inserted, time.monotonic() - started, False)
+            db.write_heartbeat(
+                conn, "poll_gdelt", seen, inserted, time.monotonic() - started, False
+            )
         except Exception:
             pass  # never mask the original failure
         raise
