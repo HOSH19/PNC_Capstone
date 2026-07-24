@@ -37,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         # New pollers: add the module name here — one line. RUNBOOK.md §6.
-        module: [poll_gdelt, poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_newsapi, poll_vantage]
+        module: [poll_gdelt, poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_agency_rss]
     steps:
       - uses: actions/checkout@v4
 

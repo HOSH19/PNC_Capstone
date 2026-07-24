@@ -1,0 +1,12 @@
+# Local convention gate: auto-fix lint + format at commit time.
+# One-time setup per machine:
+#   pip install -r requirements-dev.txt && pre-commit install
+# CI runs the same checks (ci.yml lint job) as the final gate.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Keep in sync with the ruff pin in requirements-dev.txt.
+    rev: v0.15.21
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

@@ -1,0 +1,37 @@
+name: loaders
+
+# Daily-cadence sources (Ming): market prices, macro series (full loaders),
+# and CFPB complaints (poll_cfpb -- an incremental API poller, but daily is
+# plenty for it, so it rides this schedule rather than the 6-hourly ingest.yml).
+# Same isolation as ingest.yml's poll job: fail-fast: false means one failing
+# module never blocks the others.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"   # once daily, 12:00 UTC
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # New module: add its dotted path here -- one line (run as pipeline.<x>).
+        module: [loaders.load_yfinance, loaders.load_fred, poll_cfpb]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ${{ matrix.module }}
+        run: python -m pipeline.${{ matrix.module }}
