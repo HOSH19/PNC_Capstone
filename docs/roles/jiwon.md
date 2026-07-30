@@ -60,6 +60,10 @@ Once slices 4 (Rita) and 5 (Yusheng) land on `main`, all 250 rows exist.
   guide flags as most valuable — "exploring strategic alternatives" (calm tone,
   negative), "consent order lifted" (regulator language, positive). An overall
   pass rate can hide failure on precisely those rows.
+- ⚠️ **Mind the class imbalance.** Across all 250 rows: 229 neutral, 14
+  positive, 7 negative. Per-class agreement for `negative` rests on **seven
+  rows** — do not decide the gate on that number alone. This is why Yusheng's
+  slices 6–9 exist.
 
 If the gate fails: revise the prompt, re-label, and only then consider standing
 up the Gemini challenger.
@@ -86,14 +90,13 @@ serving:
   titles are synthesized as `"{holding_name} {form}"` and are never empty, so
   the existing guard never fires.
 - **Boilerplate-only 8-K excerpts are a third class**, found while labeling
-  `gold_slice_1`: `"First Financial Bancorp. 8-K"` has a long, non-empty
-  excerpt that is entirely the SEC cover page — address, phone number, the
-  Rule 425 / 14a-12 checkboxes, the registered-securities table — with no
-  event text. An emptiness check will not catch it. Count how many of these
-  exist while labeling slice 1, then widen the predicate from "is the excerpt
-  empty" to "is there body text past the cover page". Same degenerate pattern
-  as the 107 contentless 10-Q rows: nothing to read, so every labeler writes
-  `neutral`.
+  `gold_slice_1`: `"First Financial Bancorp. 8-K"` and `"TriCo Bancshares
+  8-K"` have long, non-empty excerpts that are entirely the SEC cover page —
+  address, phone number, the Rule 425 / 14a-12 checkboxes, the
+  registered-securities table — with no event text. An emptiness check will
+  not catch it. Widen the predicate from "is the excerpt empty" to "is there
+  body text past the cover page". Same degenerate pattern as the 107
+  contentless 10-Q rows: nothing to read, so every labeler writes `neutral`.
 
 ⚠️ Both predicates must move into `eligibility` **before Stage 3 serving
 ships**. Filtering only at training time while serving keeps scoring those rows
