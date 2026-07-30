@@ -14,12 +14,15 @@
 ```mermaid
 flowchart LR
     SH1["<b>1 · 부실 이벤트 정의</b><br/>bank × quarter → 1/0"]
+    SH1B["<b>1b · OCC enforcement</b><br/>규제 조치를 포함할 경우에만"]
     SH2["<b>2 · 평가 프로토콜</b>"]
     SH3["<b>3 · evals/backtest.py</b>"]
     MING["Ming<br/>GP 분류기"]
     JW["Jiwon<br/>FinBERT 점수<br/>+ 2020–24 백필"]
     OUT(["대조군 수치<br/>+ 최종 결과"])
 
+    SH1 -.->|규제 조치 포함 시| SH1B
+    SH1B -.->|OCC 행| SH1
     SH1 --> SH2 --> SH3
     SH1 -->|학습 타겟| MING
     MING -->|점수 테이블| SH3
@@ -97,6 +100,37 @@ flowchart LR
 **검증:** 연도별 사건 수와 커버되는 은행 수. 한 은행이 사건 대부분을 만들고
 있다면, 그 평가는 방법론이 아니라 그 은행 하나를 측정하는 것이다.
 
+### 1b. OCC enforcement 수집 — 위 결정에 따라 조건부
+
+Yusheng에게서 이관됨. 1번에서 **규제 조치를 부실 사건으로 인정하기로 한
+경우에만** 진행한다. 아니면 브랜치를 닫고 건너뛴다.
+
+이 공백은 사소하지 않다. FDIC와 Fed 조치는 수집하지만 OCC는 안 하고 있는데,
+**시드 104곳 중 35곳이 국법은행(National Association)** 이다 — PNC,
+JPMorgan Chase, Bank of America, Citibank, Wells Fargo, Morgan Stanley Bank,
+U.S. Bank, Capital One, American Express, Fifth Third. 전부 OCC 감독
+대상이라, 이 폴러가 없으면 **코퍼스를 지배하는 바로 그 은행들에 대해 규제
+신호가 구조적으로 눈이 먼다.** FDIC + Fed만으로 만든 규제 기반 부실 라벨은
+"대형 국법은행은 규제 조치를 받지 않는다"처럼 보이는데, 사실이 아니다.
+
+작업은 처음부터가 아니라 거의 끝나 있다:
+
+- **`origin/occ-v2`(2026-07-24)를 쓸 것.** `origin/yusheng/occ`(2026-07-23)가
+  아니다. 최신 브랜치는 이미 poller 템플릿을 따른다 — `main()` 스켈레톤,
+  watermark, 은행별 실패 격리, 양쪽 경로의 `write_heartbeat`. 오래된 쪽은
+  삭제한다.
+- **마이그레이션 번호를 `013_add_occ_enforcement.sql`로 바꿀 것.** 브랜치는
+  현재 `012`를 쓰는데 Ming이 `012_index_tables.sql`로 가져간다. 오래된
+  브랜치의 `011`은 이미 `011_scoring_tables.sql`이다.
+- `db/migrations/CHECKSUMS`를 갱신하고 `raw_item.source` CHECK을 확장한다 —
+  정확한 ALTER 문은 `002_raw_item.sql` 헤더에 있다.
+- `.github/workflows/ingest.yml`의 `poll` 매트릭스에 `poll_occ_enforcement`
+  추가 — 표시된 자리에 한 줄.
+
+전체 체크리스트: `RUNBOOK.md` §6. 이 lane에서 `pipeline/`을 건드리는 유일한
+지점이며, 규칙의 예외가 아니라 규칙 그 자체다 — 수집을 담당해서가 아니라
+**그 데이터가 당신 자신의 부실 정의에 들어가기 때문에** 당신이 맡는다.
+
 **계약:** Ming이 이 테이블을 정답으로 GaussianProcessClassifier를 학습한다.
 **둘 중 누구도 작업을 시작하기 전에 컬럼명을 먼저 합의할 것.**
 
@@ -128,8 +162,9 @@ flowchart LR
 - **실패 은행 코호트를 만들지 말 것.** 위에서 실측함 — 뉴스가 없다.
 - **GDELT 백필을 하지 말 것.** 2020~2024 백필은 Jiwon 담당이고, 과거 행은
   손으로 라벨링하는 게 아니라 파인튜닝된 FinBERT가 채점한다.
-- **`pipeline/`을 건드리지 말 것.** 백테스트는 테이블을 읽을 뿐 수집하지
-  않는다.
+- **1b를 제외하고 `pipeline/`을 건드리지 말 것.** 백테스트는 테이블을 읽을
+  뿐 수집하지 않는다. OCC 폴러는 당신의 라벨 정의에 들어가기 때문에 범위에
+  포함된 것이며, `pipeline/`의 나머지는 당신 것이 아니다.
 
 ## 다른 사람과 만나는 지점
 

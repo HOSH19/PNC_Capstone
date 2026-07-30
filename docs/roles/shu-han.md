@@ -12,12 +12,15 @@ which is why it is worth doing carefully rather than quickly.
 ```mermaid
 flowchart LR
     SH1["<b>1 · Define distress event</b><br/>bank × quarter → 1/0"]
+    SH1B["<b>1b · OCC enforcement</b><br/>only if enforcement counts"]
     SH2["<b>2 · Eval protocol</b>"]
     SH3["<b>3 · evals/backtest.py</b>"]
     MING["Ming<br/>GP classifier"]
     JW["Jiwon<br/>FinBERT scores<br/>+ 2020–24 backfill"]
     OUT(["Control number<br/>+ final result"])
 
+    SH1 -.->|if enforcement counts| SH1B
+    SH1B -.->|OCC rows| SH1
     SH1 --> SH2 --> SH3
     SH1 -->|training target| MING
     MING -->|score table| SH3
@@ -99,6 +102,39 @@ Produce: a table of **bank × quarter → distress 1/0**.
 If one bank supplies most events, the eval will measure that bank, not the
 method.
 
+### 1b. OCC enforcement ingestion — conditional on the decision above
+
+Reassigned from Yusheng. Only do this **if** task 1 concludes that enforcement
+actions count as distress events; otherwise close the branch and skip it.
+
+The gap is not cosmetic. We ingest FDIC and Fed actions but not OCC, and
+**35 of the 104 seed banks are national associations** — PNC, JPMorgan Chase,
+Bank of America, Citibank, Wells Fargo, Morgan Stanley Bank, U.S. Bank,
+Capital One, American Express, Fifth Third. Those are OCC-supervised, so
+without this poller the enforcement signal is systematically blind for exactly
+the banks that dominate the corpus. An enforcement-based distress label built
+on FDIC + Fed alone would look like "large national banks never get enforced",
+which is false.
+
+The work is mostly done, not started from scratch:
+
+- **Use `origin/occ-v2`** (2026-07-24), not `origin/yusheng/occ` (2026-07-23).
+  The newer branch already follows the poller template — `main()` skeleton,
+  watermark, per-bank failure containment, `write_heartbeat` on both paths.
+  Delete the older branch.
+- **Renumber the migration to `013_add_occ_enforcement.sql`.** The branch
+  currently claims `012`, which Ming is taking for `012_index_tables.sql`.
+  `011` (the number on the older branch) is already `011_scoring_tables.sql`.
+- Update `db/migrations/CHECKSUMS` and extend the `raw_item.source` CHECK —
+  exact ALTER statements are in the header of `002_raw_item.sql`.
+- Add `poll_occ_enforcement` to the `poll` matrix in
+  `.github/workflows/ingest.yml` — one line, marked spot.
+
+Full checklist: `RUNBOOK.md` §6. This is the one place in your lane that
+touches `pipeline/`, and it is the exception that proves the rule — you own it
+because the data feeds your own distress definition, not because you own
+ingestion.
+
 **Contract:** Ming trains the GaussianProcessClassifier against this exact
 table. Agree the column names with Ming before either of you builds on it.
 
@@ -132,7 +168,9 @@ table. Agree the column names with Ming before either of you builds on it.
 - **Do not build a failed-bank cohort.** Measured above: no news coverage.
 - **Do not backfill GDELT.** Jiwon owns the 2020–2024 backfill; the historical
   rows are scored by the fine-tuned FinBERT, not labeled by hand.
-- **Do not touch `pipeline/`.** The backtest reads tables; it does not ingest.
+- **Do not touch `pipeline/` beyond task 1b.** The backtest reads tables; it
+  does not ingest. The OCC poller is scoped in because it feeds your own label
+  definition — nothing else in `pipeline/` is yours.
 
 ## Where you touch other people
 

@@ -87,6 +87,10 @@ The table schema is the **only** shared contract — Shu Han and Rita both read
 this and never import your code. Migration numbering is sequential and
 `db/migrations/CHECKSUMS` must be updated; see `RUNBOOK.md` §6 step 1.
 
+**`012` is yours.** The parked `origin/occ-v2` branch also claims that number;
+it has been told to renumber to `013` (see `docs/roles/shu-han.md` task 1b).
+If you end up not needing `012`, say so — otherwise it stays reserved.
+
 ## Traps specific to this data
 
 - **Positives are ~0.6% of bank-quarters.** Optimizing accuracy produces a
