@@ -4,8 +4,11 @@
 -- this source, enforcement coverage is systematically blind for those banks.
 -- Pattern documented in db/migrations/002_raw_item.sql header.
 --
--- NOTE: Do NOT re-add alpha_vantage / newsapi here (tiered out in
--- scoring/DESIGN.md). Extend only from the current live CHECK (010).
+-- IMPORTANT: this CHECK is additive. Historical rows may still use
+-- alpha_vantage / newsapi (tiered out of pollers in scoring/DESIGN.md but
+-- present in the live DB). Do not drop those values or ALTER will fail with
+-- CheckViolation. fdic_enforcement is listed for parity with migration 005
+-- even if a given environment has not ingested FDIC rows yet.
 
 ALTER TABLE raw_item DROP CONSTRAINT IF EXISTS raw_item_source_check;
 ALTER TABLE raw_item ADD CONSTRAINT raw_item_source_check
@@ -15,5 +18,7 @@ ALTER TABLE raw_item ADD CONSTRAINT raw_item_source_check
         'fdic_enforcement',
         'fed_enforcement',
         'agency_rss',
+        'alpha_vantage',
+        'newsapi',
         'occ_enforcement'
     ));
