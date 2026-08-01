@@ -57,6 +57,14 @@ CREATE INDEX idx_bank_index_score_bank_quarter
 -- Per-feature detail behind a score: what the dashboard's quarter-over-quarter
 -- table renders. Values are the ones the MODEL saw (post winsorize/impute), so
 -- they can differ slightly from raw fact_call_report — that is intentional.
+-- Feature availability note: the mentor's reference list includes "fee income
+-- ratio" and "loans vs capital", but fact_call_report has neither (12 columns:
+-- assets, deposits, tier1/total capital ratios, npl, loan-loss allowance,
+-- liquidity, unrealized securities loss, cre_loans — no fee/noninterest income,
+-- no total loans, no capital level). Those feature_name values may therefore
+-- never be populated. The column stays in the schema so that adding them later
+-- needs no migration; consumers must treat any feature row as optional and
+-- render only what is present.
 CREATE TABLE bank_index_feature (
     fdic_cert_number   integer NOT NULL,
     quarter_end_date   date    NOT NULL,
