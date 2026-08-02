@@ -9,10 +9,11 @@ full checklist.
 
 import os
 from datetime import datetime
-
+from dotenv import load_dotenv
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+load_dotenv()
 
 RAW_ITEM_COLUMNS = (
     "source", "external_id", "bank_id", "published_at", "title", "url",
