@@ -16,4 +16,9 @@ labeling_batch_*.csv
 labels_*.csv
 
 # Ming local working notes (never commit)
-index/GP_PLAN.md
+index/v1_archive/
+index/v2_rework/
+index/data/
+
+# Chinese drafts — English versions are the committed ones
+*_zh.md
