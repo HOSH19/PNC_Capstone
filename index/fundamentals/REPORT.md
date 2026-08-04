@@ -344,6 +344,48 @@ The cause is that **large banks rarely fail**: six folds yield 30 positives betw
 a limit on evidence, not evidence that the model is worse on large banks — but by the same token,
 **its performance on large banks cannot be confirmed either**.
 
+### Why these three features
+
+The three are not independent indicators — they are the same quantity in three tenses:
+
+```
+equity / assets              how much cushion is left now          stock
+pre-tax income / assets      whether the cushion is growing        flow
+retained earnings / assets   how much cushion was ever built       accumulated flow
+```
+
+They separate cleanly, and they carry distinct information (pairwise Spearman 0.15-0.36, far
+below the 0.95 pruning threshold):
+
+| | Pre-failure median | Surviving median | Negative before failure | Negative while surviving |
+|---|---|---|---|---|
+| pre-tax income / assets | **−1.82%** | +0.45% | **87.6%** | 9.3% |
+| equity / assets | **4.21%** | 10.43% | 2.5% | 0.1% |
+| retained earnings / assets | **−4.07%** | +6.00% | **74.8%** | 9.6% |
+
+Retained earnings is a component of equity, yet the two correlate at only 0.360 — the remainder
+is paid-in capital and AOCI. A bank with healthy equity but negative retained earnings is being
+kept alive by shareholder injections rather than by its own earnings, and that distinction
+carries signal.
+
+**But there is a more mechanical reason capital dominates, and it cuts both ways.**
+
+FDIC closure is itself defined in capital terms. Under Prompt Corrective Action, a bank whose
+tangible equity falls to 2% of assets is "critically undercapitalized", and regulators are
+required to place it in receivership within 90 days. The prediction target — closure within 366
+days — is therefore tied by statute to the very quantity these features measure.
+
+That explains two things at once:
+
+| | |
+|---|---|
+| **Why NPL, liquidity and concentration never reach the top 3** | They are *causes* of capital depletion. The model reads the outcome directly, one step closer to the target |
+| **Why SVB is invisible** | SVB met its capital requirements when it was closed. It died of a deposit run, not of a PCA trigger — the model learned the statutory closure path, and SVB took a different one |
+
+The second row is the sharper statement of §5.4: the limitation is not merely that unrealised
+HTM losses bypass the income statement, but that **the model learned one legal pathway to
+closure and 2023 ran through another**.
+
 ### Specification
 
 | | |
