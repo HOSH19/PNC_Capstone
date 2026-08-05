@@ -35,12 +35,13 @@ following quarter to join to. The prediction time is the report date plus the
 import glob
 import json
 import os
+import pathlib
 import sys
 
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, "/Users/ming/project/PNC_Capstone")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 SRC = os.environ.get("FFIEC_OUT", "/tmp/ffiec_raw")
 OUT = os.environ.get("MODEL_OUT", "/tmp/index_fundamentals")
@@ -50,9 +51,19 @@ MAX_LABEL_GAP = 0.10         # pos/neg coverage gap
 MIN_SIDE_COV = 0.70          # coverage floor on both sides
 MAX_SIZE_GAP = 0.10          # coverage gap, largest 1% vs the rest
 LAG_DAYS = 45                # filing lag: report public ~30-35 days after quarter end
-LABEL_START = "2008"         # DB labels begin 2008Q1; earlier quarters are lookback only
-SCREEN_UNTIL = "20110515"    # label-touching screening sees only the first fold's
+LABEL_START = "2017"         # RCN_1403/1407 (the NPL leg) first exist 2017Q1
+SCREEN_UNTIL = "20190213"    # label-touching screening sees only the first fold's
                              # training window, never a test year
+DEPOSIT_THR = -0.10          # Shu Han evals/distress_definition.md v1
+NPL_MULTIPLE_THR = 1.5
+NPL_LEVEL_THR = 2.0
+HORIZON_Q = 4                # event in Q+1..Q+4 -> label 1 at Q
+# A row's label needs HORIZON_Q forward quarters to exist. The last few quarters
+# of any extract do not have them, so their positives are silently missing: the
+# rate falls 10.9% -> 8.4% -> 6.0% -> 3.3% -> 0% across the final five quarters
+# of this build. Those rows are dropped rather than left in the panel labelled 0.
+DROP_UNCLOSED = True
+
 BIG_FRAC = 0.01              # "largest" = top 1%; FFIEC-031 filers are ~56% of it
                              # but only ~9.7% of the top decile, so a decile
                              # comparison cannot resolve them
@@ -88,50 +99,94 @@ def stable_fields():
 
 
 def labels():
-    """Official FDIC failure label, computed from failure dates rather than joined.
+    """Distress-state label, per `evals/distress_definition.md` v1 (owner: Shu Han).
 
-    The obvious implementation — join the next quarter's `distress_within_4q`
-    from fact_bank_quarter — silently loses the most informative rows. A bank
-    files nothing in the quarter it fails, so it has no q+1 row, so the join
-    returns NaN and its last filing is dropped. That removed 491 pre-failure
-    filings, 20.5% of the recoverable positives, including SVB's 2022Q4 report
-    (the one carrying the unrealised losses) and First Republic's 2023Q1.
+    An event fires in quarter Q when either leg holds:
 
-    So derive it directly: prediction time T = quarter end + 45 days, and y = 1
-    when the bank's failure falls within 366 days after T. Same window
-    modeling.py uses, but it does not require the bank to still be filing.
+      deposit outflow   (dep_Q - dep_{Q-1}) / dep_{Q-1} <= -10%
+      NPL spike         npl_Q / npl_{Q-1} >= 1.5  and  npl_Q > 2%
+
+    A row at Q is labelled 1 when an event fires in Q+1..Q+4 — one year ahead,
+    matching the horizon the failure model used.
+
+    Two deliberate departures from that document, both widening scope rather
+    than changing the rule:
+
+    1. All filers, not the 104 seed banks. The 104-bank restriction gives 120
+       positives; every filer gives ~16k. The document excludes the wider set
+       for the *combined* eval, where the sentiment axis needs text coverage —
+       that constraint binds on evaluation, not on training.
+    2. Read from the FFIEC archives rather than `fact_call_report`, which puts
+       both inputs on a different basis. Deposits become RCON+RCFN (domestic
+       plus foreign offices) instead of domestic only, and the NPL ratio
+       becomes consolidated. Three of the four seed-bank event disagreements
+       trace to the deposit half; the fourth is `fact_call_report` reporting
+       $18.0bn deposits and 5.56% NPL for RSSD 694904 in 2022Q1 where the
+       source filing gives $38.09bn and 0.134%.
+
+    2017Q1 is the floor: RCN_1403 / RCN_1407 do not exist before it, so the NPL
+    leg cannot fire and the label would silently mean something different.
     """
-    from pipeline import db
-    c = db.connect()
-    cur = c.cursor()
-    cur.execute("select fdic_cert_number, rssd_id, report_date from fact_call_report")
-    m = pd.DataFrame(cur.fetchall())
-    cur.execute("select fdic_cert_number, min(failure_date) fd from fact_distress_event "
-                "where failure_date is not null group by 1")
-    fail = pd.DataFrame(cur.fetchall())
-    c.close()
-
-    m["q"] = pd.to_datetime(m.report_date).dt.strftime("%Y%m%d")
+    import glob
+    RAW = os.environ.get("FFIEC_OUT", "/tmp/ffiec_raw")
+    need = ["IDRSSD", "RC_2200", "RCN_1403", "RCN_1407", "RCCI_2122"]
+    parts = []
+    for f in sorted(glob.glob(f"{RAW}/*.parquet")):
+        q = os.path.basename(f)[:8]
+        if q[:4] < LABEL_START:
+            continue
+        d = pd.read_parquet(f)
+        if "RCN_1403" not in d.columns:
+            continue
+        k = d[[c for c in need if c in d.columns]].copy()
+        k["q"] = q
+        parts.append(k)
+    m = pd.concat(parts, ignore_index=True)
+    m = m.rename(columns={"IDRSSD": "rssd_id"})
     m["rssd_id"] = m.rssd_id.astype("int64")
-    m = m[~m.duplicated(subset=["rssd_id", "q"])]
+    m = m[~m.duplicated(subset=["rssd_id", "q"])].sort_values(["rssd_id", "q"])
 
-    # Prediction time is the report date plus the filing lag, not the next
-    # quarter end. FFIEC allows 30-35 days; 45 gives a buffer, and it is the
-    # earliest moment the quarter's figures are actually public. Rounding up to
-    # the next quarter end instead throws away six weeks of warning and, worse,
-    # discards banks that fail inside those six weeks: SVB's 2022Q4 filing —
-    # the one carrying the unrealised losses — becomes unusable, because it
-    # failed on 2023-03-10, three weeks before 2023Q1 end.
+    # NPL ratio, percent. Same numerator as fact_call_report
+    # (unified_ffiec_fdic_dataset/scripts/ffiec_call_reports.py:128) but on the
+    # consolidated basis, since extract.py already coalesced RCFD over RCON.
+    npl_bal = m.RCN_1403.fillna(0) + m.RCN_1407.fillna(0)
+    m["npl"] = np.where(m.RCCI_2122 > 0, npl_bal / m.RCCI_2122 * 100, np.nan)
+
+    g = m.groupby("rssd_id")
+    dep0, npl0 = g.RC_2200.shift(1), g.npl.shift(1)
+    dep_leg = (((m.RC_2200 - dep0) / dep0 <= DEPOSIT_THR) & (dep0 > 0)).fillna(False)
+    npl_leg = (((m.npl / npl0 >= NPL_MULTIPLE_THR) & (m.npl > NPL_LEVEL_THR)
+                & (npl0 > 0))).fillna(False)
+    m["ev"] = (dep_leg | npl_leg).astype(np.int8)
+
+    # Label at Q asks whether an event fires in Q+1..Q+HORIZON_Q. Looking only
+    # forward already excludes Q's own event, and an event quarter still gets
+    # y=1 when a *later* event falls inside the horizon -- both as specified.
+    ge = m.groupby("rssd_id").ev
+    fwd = [ge.shift(-s).fillna(0).astype(np.int8) for s in range(1, HORIZON_Q + 1)]
+    m["y"] = np.maximum.reduce(fwd)
+    m["dtd"] = np.select([f.astype(bool) for f in fwd], list(range(1, HORIZON_Q + 1)),
+                         default=np.nan)
+
     qe = pd.to_datetime(m.q, format="%Y%m%d")
-    pred = qe + pd.Timedelta(days=LAG_DAYS)
-    m["pred_q"] = pred.dt.strftime("%Y%m%d")
+    m["pred_q"] = (qe + pd.Timedelta(days=LAG_DAYS)).dt.strftime("%Y%m%d")
 
-    m = m.merge(fail, on="fdic_cert_number", how="left")
-    delta = (pd.to_datetime(m.fd) - pd.to_datetime(m.pred_q, format="%Y%m%d")).dt.days
-    m["dtd"] = delta.where(delta.between(0, 366))
-    m["y"] = delta.between(0, 366).fillna(False).astype(np.int8)
-    log(f"    标签:{int(m.y.sum()):,} 正例 / {len(m):,} 行 "
-        f"(预测时点 = 财报期末 + {LAG_DAYS} 天;按 failure_date 直接推导)")
+    if DROP_UNCLOSED:
+        qs = sorted(m.q.unique())
+        keep = qs[:-HORIZON_Q] if len(qs) > HORIZON_Q else qs
+        n0 = len(m)
+        m = m[m.q.isin(keep)]
+        log(f"    剔除标签未闭合的 {len(qs) - len(keep)} 个财报季 "
+            f"({sorted(set(qs) - set(keep))}): {n0:,} -> {len(m):,} 行")
+
+    # Count the legs over the rows that survive, not the pre-drop frame — the
+    # two used to be printed on different bases and did not add up.
+    kept = m.index if not DROP_UNCLOSED else m.index
+    dl, nl = dep_leg.loc[kept], npl_leg.loc[kept]
+    log(f"    标签:{int(m.y.sum()):,} 正例 / {len(m):,} 行 / "
+        f"{m[m.y == 1].rssd_id.nunique():,} 家 "
+        f"(事件 {int(m.ev.sum()):,} 个:存款腿 {int(dl.sum()):,} · "
+        f"NPL腿 {int(nl.sum()):,} · 两腿同时 {int((dl & nl).sum()):,})")
     return m.set_index(["rssd_id", "q"])[["y", "dtd", "pred_q"]]
 
 
@@ -157,9 +212,8 @@ def build(files, stable, key):
     d = d[d.y.notna() & d.pred_q.notna()].copy()
     d["y"] = d.y.astype(np.int8)
     d["year"] = d.pred_q.str[:4].astype(int)
-    # days_to_distress is NOT written to the panel. It is derived from the
-    # failure date and is populated for negatives too, so anything that picked
-    # it up as a feature would be reading the answer.
+    # dtd is NOT written to the panel. It counts quarters to the next event,
+    # so anything that picked it up as a feature would be reading the answer.
     log(f"    面板 {len(d):,} 行 | {int(d.y.sum()):,} 正例 ({d.y.mean()*100:.3f}%) "
         f"| {d.IDRSSD.nunique():,} 家银行 | 特征季 {d.quarter.min()[:6]}~{d.quarter.max()[:6]}")
     return d
@@ -259,7 +313,10 @@ def prune(d, feats, thresh=0.95):
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
     from sklearn.metrics import roc_auc_score
-    s = d.sample(min(60000, len(d)), random_state=0)
+    # The correlation matrix is unsupervised, but keeping it inside the same
+    # window as every other screening step removes the question entirely.
+    w = d[d.pred_q <= SCREEN_UNTIL]
+    s = w.sample(min(60000, len(w)), random_state=0)
     corr = np.array(s[feats].corr(method="spearman").abs().fillna(0).values, copy=True)
     np.fill_diagonal(corr, 1.0)
     dist = (1 - corr + (1 - corr).T) / 2

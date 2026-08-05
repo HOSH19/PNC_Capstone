@@ -18,6 +18,7 @@ labels_*.csv
 # Ming local working notes (never commit)
 index/v1_archive/
 index/v2_rework/
+index/v3/
 index/data/
 
 # Chinese drafts — English versions are the committed ones

@@ -23,6 +23,7 @@ Two families:
 """
 import json
 import os
+import pathlib
 import sys
 import warnings
 
@@ -30,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "/Users/ming/project/PNC_Capstone")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 from sklearn.gaussian_process import GaussianProcessClassifier as GPC
 from sklearn.gaussian_process.kernels import ConstantKernel as C
 from sklearn.gaussian_process.kernels import Matern
@@ -38,11 +39,39 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-OUT = os.environ.get("MODEL_OUT", "/tmp/index_fundamentals")
-FIRST_TEST, LAST_TEST = 2012, 2025
+OUT = os.environ.get("MODEL_OUT", "/tmp/index_v4")
+# The distress label needs a prior quarter to compute the event rule and four
+# forward quarters to close, so the usable panel is 2017Q2-2025Q1. With a
+# one-year embargo the first fold that gets a workable training window is 2020;
+# 2019 would train on four quarters.
+FIRST_TEST, LAST_TEST = 2020, 2025
 XGB_TIERS = [5, 10, 22, 50, 100]
-GP_DIMS = [3, 5, 8, 12]
-N_NEG = 3000                      # GP negative sample; positives all kept
+# v3 stopped at 12 because the GP curve was flat there (0.251/0.251/0.254/0.251).
+# On this label it is still climbing at 12, so the ceiling has to be found rather
+# than assumed. Kernel methods usually degrade past ~20-50 dims as pairwise
+# distances concentrate; if gp50 collapses, check length_scale before concluding
+# it is the dimension — the sqrt(dim)*1.5 heuristic was tuned on 3-12.
+GP_DIMS = [3, 5, 8, 12, 22, 50]
+# The failure label had 1,919 positives and kept every one. This label has
+# ~17.5k, far past what an O(n^3) GP can fit, so both sides are sampled and the
+# ratio is held at 1:1.5 rather than left at the panel's 1:10.
+N_POS = 2000
+N_NEG = 3000
+
+# The label is built from deposits and NPL, so schedules that report those same
+# quantities are partly definitional rather than predictive: an event at Q+1 is
+# measured against the feature quarter's own value. Not leakage — nothing from
+# the future is used — but it changes what a good score means. DROP_SAMESOURCE=1
+# runs the same folds without them, and the gap between the two arms is the size
+# of the definitional component.
+# By schedule: RC-E deposit detail, RC-N past due and nonaccrual, RC-O deposit
+# insurance, RC-K quarterly averages, RI-B II allowance roll-forward. Prefix
+# alone misses three items that sit on Schedule RC itself — RC_2200 is total
+# deposits, the literal input to the deposit-outflow leg, and RC_6631 + RC_6636
+# sum to it. RC_2200 reached rank 8 of the "clean" fixed list before this.
+SAMESOURCE = ("RCE_", "RCN_", "RCO_", "RCK_", "RIBII_")
+SAMESOURCE_ITEMS = ("RC_2200", "RC_6631", "RC_6636")
+DROP_SAMESOURCE = os.environ.get("DROP_SAMESOURCE") == "1"
 
 
 def log(m):
@@ -83,7 +112,9 @@ def fit_gp(Xtr, ytr, Xte, dim, seed=0):
     optimised — letting the optimiser run free sent it to ~1e4 and the kernel
     degenerated; sqrt(dim)*1.5 lands in the band that worked empirically."""
     rng = np.random.RandomState(seed)
-    pos = np.where(ytr == 1)[0]
+    pos_all = np.where(ytr == 1)[0]
+    pos = (rng.choice(pos_all, N_POS, replace=False)
+           if len(pos_all) > N_POS else pos_all)
     neg = rng.choice(np.where(ytr == 0)[0], min(N_NEG, int((ytr == 0).sum())),
                      replace=False)
     idx = np.concatenate([pos, neg])
@@ -106,9 +137,14 @@ def main():
     d["qd"] = pd.to_datetime(d.pred_q, format="%Y%m%d")
     d["dec"] = d.groupby("pred_q").log_assets.transform(
         lambda s: pd.qcut(s, 10, labels=False, duplicates="drop"))
+    if DROP_SAMESOURCE:
+        n0 = len(feats)
+        feats = [f for f in feats
+                 if not f.startswith(SAMESOURCE) and f not in SAMESOURCE_ITEMS]
+        log(f"剔除与标签同源的字段: {n0} -> {len(feats)}")
     log(f"面板 {len(d):,} 行 | {int(d.y.sum()):,} 正例 | 候选特征 {len(feats)}")
 
-    rows, votes, lvs = [], {f: 0 for f in feats}, []
+    rows, votes, lvs, oos = [], {f: 0 for f in feats}, [], []
     for Y in range(FIRST_TEST, LAST_TEST + 1):
         te = d[d.year == Y]
         if len(te) == 0:
@@ -117,9 +153,11 @@ def main():
         # window runs 366 days forward, so it must close before the first test
         # prediction is made. A fixed quarter-end cut left the last training
         # window overlapping the first test window by a day.
+        # The label looks four quarters forward (~365 days); 366 keeps the same
+        # constant as the failure model and errs on the safe side.
         cut = te.qd.min() - pd.Timedelta(days=366)
         tr = d[d.qd <= cut]
-        if tr.y.sum() < 20 or te.y.sum() < 5:
+        if tr.y.sum() < 200 or te.y.sum() < 50:
             log(f"{Y}: 跳过(测试正例 {int(te.y.sum())})")
             continue
         ytr, yte = tr.y.values, te.y.values
@@ -144,6 +182,18 @@ def main():
         rk = lambda x: pd.Series(x).rank(pct=True).values
         preds["gp5+xgb10"] = ((rk(preds["gp5"][0]) + rk(preds["xgb10"][0])) / 2, [])
 
+        # Persist the out-of-sample predictions themselves, not only their
+        # metrics. Without this the fold predictions are recomputed-and-thrown-
+        # away, so nothing downstream can grade them: the production model is
+        # fit on all history and is in-sample for every past quarter, making
+        # these the only leak-free per-row scores the project has.
+        keys = [c for c in ("IDRSSD", "quarter", "pred_q") if c in te.columns]
+        base = te[keys].reset_index(drop=True)
+        for name, (p, _) in preds.items():
+            base[name] = p
+        base["y"], base["fold"] = yte, Y
+        oos.append(base)
+
         for name, (p, sub) in preds.items():
             m = metrics(yte, p)
             if m:
@@ -157,6 +207,9 @@ def main():
     r = pd.DataFrame(rows)
     r.to_csv(f"{OUT}/per_fold.csv", index=False)
     pd.DataFrame(lvs).to_csv(f"{OUT}/latent_var.csv", index=False)
+    if oos:
+        pd.concat(oos, ignore_index=True).to_parquet(
+            f"{OUT}/oos_predictions.parquet", index=False)
 
     agg = (r.groupby("model").apply(lambda g: pd.Series({
         "折": len(g), "正例": int(g.pos.sum()),

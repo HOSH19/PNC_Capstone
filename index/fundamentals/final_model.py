@@ -19,6 +19,7 @@ quantiles and the band is what gets published, not the raw probability.
 """
 import json
 import os
+import pathlib
 import sys
 import warnings
 
@@ -26,14 +27,15 @@ import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "/Users/ming/project/PNC_Capstone")
-sys.path.insert(0, "/Users/ming/project/PNC_Capstone/index/fundamentals")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import score as SC
 from models import fit_gp, fit_xgb, gains
 
 OUT = os.environ.get("MODEL_OUT", "/tmp/index_fundamentals")
 TODAY = pd.Timestamp(os.environ.get("MODEL_TODAY", "2026-08-04"))
-DIM = int(os.environ.get("MODEL_DIM", "5"))
+DIM = int(os.environ.get("MODEL_DIM", "50"))
+FIXED_ORDER = os.environ.get("FIXED_ORDER", "/tmp/fixed_order.json")
 CAL_YEARS = 1                     # most recent complete year, held out of the fit
 
 
@@ -52,8 +54,14 @@ def main():
     log(f"今天 {TODAY.date()} → 标签闭合要求 预测季 <= {cut.date()}")
     log(f"  可用   {len(usable):,} 行 | {int(usable.y.sum()):,} 正例 "
         f"| {usable.IDRSSD.nunique():,} 家银行")
-    log(f"  截断   {len(censored):,} 行(预测季 {censored.pred_q.min()[:6]}~"
-        f"{censored.pred_q.max()[:6]})—— 排除,标签窗口未关闭")
+    # features.py already drops the quarters whose label window cannot close
+    # (DROP_UNCLOSED), so this is normally empty — the check stays as a guard in
+    # case the panel is rebuilt without it.
+    if len(censored):
+        log(f"  截断   {len(censored):,} 行(预测季 {censored.pred_q.min()[:6]}~"
+            f"{censored.pred_q.max()[:6]})—— 排除,标签窗口未关闭")
+    else:
+        log("  截断   0 行(面板已在 features.py 剔除未闭合季度)")
 
     cal_from = usable.qd.max() - pd.DateOffset(years=CAL_YEARS)
     fit_set, cal_set = usable[usable.qd <= cal_from], usable[usable.qd > cal_from]
@@ -62,10 +70,13 @@ def main():
     log(f"  校准   {len(cal_set):,} 行 | {int(cal_set.y.sum()):,} 正例 "
         f"(预测季 {cal_set.pred_q.min()[:6]}~{cal_set.pred_q.max()[:6]})")
 
-    order = gains(fit_xgb(fit_set[feats], fit_set.y.values), feats).sort_values(
-        ascending=False).index.tolist()
+    # The feature list is fixed, not re-ranked here. models.py ranks once on the
+    # first fold's training window and every fold uses that same list, so the
+    # walk-forward numbers describe this exact model. Re-ranking on the full
+    # training set would produce a different list and break that correspondence.
+    order = json.load(open(FIXED_ORDER))["all"]
     sub = order[:DIM]
-    log(f"\n最终 {DIM} 个输入(全量训练集上的 XGBoost gain 排序):")
+    log(f"\n最终 {DIM} 个输入(固定名单,来自第一折训练窗口):")
     for i, f in enumerate(sub, 1):
         log(f"  {i}. {f}")
 
@@ -74,7 +85,9 @@ def main():
     y = fit_set.y.values
     p_cal, _, used = fit_gp(X(fit_set), y, X(cal_set), DIM)
     p_all, lv_all, _ = fit_gp(X(fit_set), y, X(d), DIM)
-    log(f"\nGP 实际训练用 {used:,} 行(全部 {int(y.sum()):,} 正例 + 负采样)")
+    from models import N_POS, N_NEG
+    log(f"\nGP 实际训练用 {used:,} 行:{min(N_POS, int(y.sum())):,} 正例"
+        f"(从 {int(y.sum()):,} 个中抽样)+ {min(N_NEG, len(y) - int(y.sum())):,} 负例")
 
     calib = SC.fit_calibrator(p_cal, cal_set.y.values)
     anchors = SC.fit_score_anchors(SC.calibrate(calib, p_cal))

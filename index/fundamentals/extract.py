@@ -53,6 +53,28 @@ PREFIX_RANK = {
     "RIAD": 0, "RIBI": 0,
 }
 
+# Ranking alone is wrong for items where the prefixes are *complements* rather
+# than alternatives. RCFD is the consolidated entity, so it already contains the
+# foreign offices and beats everything. But when no consolidated column is filed
+# — deposits (item 2200) is the case that matters — RCON is domestic offices and
+# RCFN is foreign offices, and the total is their SUM. Ranking picks RCFN, which
+# for an FFIEC-031 filer is a small volatile slice: on 2021Q1, 26 of the 200
+# largest banks got a "total deposits" worth 0.07-0.5% of the real figure.
+# Only RCON/RCFN are an office split. RCOA/RCOW are the RC-R columns an
+# FFIEC-041 filer uses instead of RCFA/RCFW — whole-bank alternatives, so they
+# stay on the ranked path. Adding one to a foreign-office figure would be a
+# category error even though no item currently files both.
+CONSOLIDATED = ("RCFD", "RCFA", "RCFW", "RIAD", "RIBI")
+DOMESTIC = ("RCON",)
+FOREIGN = ("RCFN",)
+ALTERNATE = ("RCOA", "RCOW")
+# Description columns. Their item code can collide with a numeric one, and the
+# ranked fallback then pulls a bare number someone typed into a free-text box
+# into the measurement — 67 such cells on 2021Q1. Excluded by name so that an
+# unrecognised *numeric* prefix still falls through to the ranked path.
+TEXTUAL = ("TEXT", "TE01", "TE02", "TE03", "TE04", "TE05",
+           "TE06", "TE07", "TE08", "TE09", "TE10")
+
 
 def schedule_files(z, code):
     """Every part of a schedule — RCB/RCO/RCL ship as '(1 of 2)' and so on."""
@@ -104,13 +126,53 @@ def parse_schedule(z, code):
                 continue
             by_item.setdefault(c[4:], []).append((c[:4], p[c]))
 
-    keep = {}
-    for item, cols in by_item.items():
-        cols.sort(key=lambda t: PREFIX_RANK.get(t[0], 9))
+    def coalesce(cols, group):
+        """Rank-ordered fillna across one prefix family; None if none present."""
+        sel = sorted((t for t in cols if t[0] in group),
+                     key=lambda t: PREFIX_RANK.get(t[0], 9))
         merged = None
-        for _, s in cols:
+        for _, s in sel:
             v = pd.to_numeric(s.astype(str).str.strip('"'), errors="coerce")
             merged = v if merged is None else merged.fillna(v)
+        return merged
+
+    keep = {}
+    for item, cols in by_item.items():
+        cons = coalesce(cols, CONSOLIDATED)
+        dom = coalesce(cols, DOMESTIC)
+        forn = coalesce(cols, FOREIGN)
+
+        # Row-wise, not column-wise: an FFIEC-031 filer may leave RCFD blank for
+        # an item while still filing both office columns, so the decision has to
+        # be made per bank.
+        parts_sum = None
+        if dom is not None or forn is not None:
+            d = dom if dom is not None else 0.0
+            f = forn if forn is not None else 0.0
+            both_na = ((dom.isna() if dom is not None else True)
+                       & (forn.isna() if forn is not None else True))
+            parts_sum = (pd.Series(d, index=idx).fillna(0)
+                         + pd.Series(f, index=idx).fillna(0))
+            parts_sum = parts_sum.mask(both_na)
+
+        if cons is None:
+            merged = parts_sum
+        elif parts_sum is None:
+            merged = cons
+        else:
+            merged = cons.fillna(parts_sum)
+
+        # Everything not in the three families, ranked as before: the RC-R
+        # domestic forms, and any prefix absent from PREFIX_RANK (rank 9). The
+        # fallback has to be derived from the columns present, not from
+        # PREFIX_RANK, or an unrecognised prefix is dropped instead of ranked.
+        rest = tuple(sorted({pre for pre, _ in cols}
+                            - set(CONSOLIDATED + DOMESTIC + FOREIGN + TEXTUAL)))
+        leftover = coalesce(cols, rest)
+        if leftover is not None:
+            merged = leftover if merged is None else merged.fillna(leftover)
+        if merged is None:
+            continue
         if merged.notna().mean() >= MIN_COV:
             keep[item] = merged
     if not keep:

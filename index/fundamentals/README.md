@@ -1,124 +1,180 @@
 # index/fundamentals — fundamentals axis
 
-Predicts the probability that a bank is closed by the FDIC within 366 days, from FFIEC Call
-Report data. Outputs a 0-100 score with confidence intervals.
+Predicts the probability that a bank triggers a distress event within the next four
+quarters, from FFIEC Call Report data. Emits a 0–100 score with confidence intervals
+and a risk band.
 
-**Model** — `gp3`: a Gaussian Process classifier over 3 features (pre-tax income, total equity,
-retained earnings, each divided by total assets)
-**Result** — on the 2012 fold, watching 3.1% of US banks (227 of them) captures 93% of that
-year's failures
-**Boundary** — effectively blind to rate/duration-driven failures like 2023. The reason is
-accounting, not tuning.
+The distress event is defined in `evals/distress_definition.md` (branch `SH`). This
+axis does not change the rule — it only widens the bank scope from the 104 seed banks
+to every filer, because 104 banks yield 120 positives, too few to train on.
 
-Full findings in **[REPORT.md](REPORT.md)**.
+**Current model** `gp50@fixed` — a Gaussian Process classifier over 50 fixed features.
 
-> This is the **fundamentals axis** of the stability index. The combined index described in
-> `index/README.md` also needs a sentiment axis (Jiwon's), and the combination step is not built
-> — sentiment data is close to zero inside the modelling window.
+**Performance and boundaries are in [REPORT.md](REPORT.md)**: §5 results · §6 why this
+model · §7.3 why the 104-bank scope cannot measure it.
 
 ---
 
-## What's here
+## What this adds
 
 ### Pipeline — four scripts, run in order
 
 | Script | What it does | Output | Runtime |
 |---|---|---|---|
-| **`extract.py`** | Downloads quarterly FFIEC CDR archives and parses 17 schedules, **coalescing RCFD/RCON prefixes by MDRM item** (consolidated wins) | per-quarter parquet, 1,966 raw fields | ~60 min |
-| **`features.py`** | Builds the labelled panel, applies four screens (stability / missingness-vs-label / **missingness-vs-size** / type) and correlation pruning | `panel.parquet`, 329 candidate features | ~15 min |
-| **`models.py`** | Walk-forward over 13 folds: 5 XGBoost tiers × 4 GP dimensions × an ensemble, scored on the full sample and on the large-bank subset | `summary.csv`, `per_fold.csv`, `stability.csv` | ~90 min |
-| **`final_model.py`** | Fits the chosen model on every row whose label window has closed, calibrates, and scores | `scores.parquet`, `final_model.json` | ~5 min |
+| `extract.py` | Downloads quarterly FFIEC archives, parses 17 schedules, coalesces prefixes by MDRM item | per-quarter parquet, 1,576 raw fields | ~60 min |
+| `features.py` | Builds the labelled panel, five screens | `panel.parquet`, 529 candidate features | ~15 min |
+| `models.py` | 6-fold walk-forward, 5 XGBoost tiers × 6 GP dimensions + an ensemble | `summary.csv` · `per_fold.csv` · `oos_predictions.parquet` | ~25 min |
+| `final_model.py` | Fits on label-closed rows, calibrates, scores | `scores.parquet` · `final_model.json` | ~5 min |
 
 ```bash
-python3 index/fundamentals/extract.py            # FFIEC_START=20080101 cuts ~40% of the download
+python3 index/fundamentals/extract.py            # FFIEC_START=20170101 fetches only the 37 quarters needed
 python3 index/fundamentals/features.py
-python3 index/fundamentals/models.py
-MODEL_DIM=3 python3 index/fundamentals/final_model.py
+python3 index/fundamentals/models.py             # DROP_SAMESOURCE=1 runs the label-adjacent-fields control
+MODEL_DIM=50 python3 index/fundamentals/final_model.py
 ```
 
-`score.py` maps a calibrated probability onto the published score. `pipeline/db.py` supplies the
-database connection.
+`score.py` maps a calibrated probability onto the published score and band;
+`pipeline/db.py` supplies the database connection.
 
-### Three decisions that carry the design
+### Deliverables — two
 
-| | |
-|---|---|
-| **Consolidated basis wins** | Banks with foreign offices file FFIEC 031 (`RCFD` prefix); domestic-only banks file 041 (`RCON`). Both columns of the same item are populated in some quarters, so extraction has to choose by priority — otherwise large banks lose 30-60% of their balance sheet. See REPORT §1.1 |
-| **Missingness is screened against size, not only against the label** | A field can show 98%+ coverage with no label gap while every large bank is missing it: the affected banks are 1.8% of the panel and nearly all survivors. This screen compares the **top 1%** by assets against the rest, because FFIEC-031 filers are ~56% of the top 1% but only ~9.7% of the top decile |
-| **Selection happens inside each fold** | Feature ranking, tier choice and calibration all use that fold's training rows only. Ranking once on the full panel lets the candidate list see every test year — everything downstream inflates, and nothing in the results reveals it |
+| # | File | For | Purpose |
+|---|---|---|---|
+| **1** | `scores_gp50_fixed_v1.csv` | **backtest (Shu Han)** | feeds `evals/backtest.py` directly |
+| **2** | `final_model.json` | this axis | reproduction and version tracking |
+
+**The dashboard has no data yet.** `final_model.py` produces `scores.parquet`
+(167,872 rows of scores / intervals / bands), but **nothing writes it into
+`bank_index_score`** — that belongs to the deployment path, which is out of scope
+here. The dashboard reads the table, not a file; until the loader exists, that table
+is empty.
 
 ---
 
-## Running in production
+#### 1 · `scores_gp50_fixed_v1.csv` — backtest (Shu Han)
 
-Scoring has three parts. The scripts currently read and write local parquet; wiring them to the
-database and to Actions is not yet implemented.
+65,686 rows / 4,925 banks / 2021-12-31 to 2025-03-31. Four columns matching the input
+contract in `evals/backtest_protocol.md`: `fdic_cert_number` · `quarter_end_date` ·
+`risk_score` (higher = riskier) · `model_version`.
 
-### 1. Input table
+The bank coverage is far wider than the labels CSV, but the harness joins on
+`(fdic_cert_number, quarter_end_date)`, so the extra rows fall away on their own —
+**no pre-filtering needed**. The default window (`--split-date 2021-12-31`,
+`--test-end 2024-12-31`) is fully covered: all 12 quarters, all 104 banks.
 
-The model needs four FFIEC fields. They live separately from `fact_call_report`, which has its
-own consumers and reads values on a different basis (REPORT §10).
-
-```sql
-create table <name tbd> (
-  rssd_id            integer not null,
-  report_date        date    not null,
-  total_assets       double precision,  -- RC_2170, consolidated preferred
-  pretax_income      double precision,  -- RI_4300
-  total_equity       double precision,  -- RC_3210
-  retained_earnings  double precision,  -- RC_3632
-  primary key (rssd_id, report_date)
-);
+```bash
+python3 evals/backtest.py \
+  --scores <path>/scores_gp50_fixed_v1.csv \
+  --labels evals/items/distress_bank_quarter.csv \
+  --split-date 2021-12-31 --test-end 2024-12-31 --budget 10 --precision-at 50
 ```
 
-About 17 MB. The collector reuses `extract.py`'s prefix-coalescing logic and keeps these four
-fields.
+**Read REPORT §7.3 before running** — that window holds only 29–32 positives, so the
+resulting number is uninformative in either direction. Moving `--split-date` earlier
+requires refitting a model and regenerating the scores (~3 min), because the current
+model has seen everything before 2021Q4.
 
-### 2. Frozen training set
+#### 2 · `final_model.json` — reproduction and version tracking
 
-**The training cutoff is fixed at 2024Q1**, which makes the 4,919 training rows (1,919 positives
-plus a 3,000-row negative sample at `seed=0`) a fixed set. They are committed alongside the four
-parameter groups derived from them:
-
-```
-train_sample.parquet    4,919 rows × 3 features + label       ~200 KB
-frozen_params.json      imputation medians · StandardScaler ·   <1 KB
-                        Platt calibrator · score anchors
-```
-
-Scoring refits from that 200 KB in about 60 seconds. Fixed data plus a fixed seed makes the
-result exactly reproducible, which is what keeps scores comparable across quarters.
-
-A GP's predictions depend on its entire training set plus an n×n matrix — roughly 194 MB once
-serialised. Storing the seed data instead is three orders of magnitude smaller, survives
-scikit-learn upgrades, and can be rebuilt from source.
-
-**Upgrading the model**: move the training cutoff, regenerate the frozen files, and bump
-`model_version` from `gp3-2024Q1`. That column marks which scores came from the same yardstick.
-
-### 3. Quarterly scoring
-
-```
-1. pull the latest FFIEC quarter → 4 fields → upsert input table     ~3 min
-2. read the frozen training set → fit the GP                         ~1 min
-3. score the latest quarter → write bank_index_score                 ~1 min
-```
-
-An Actions runner has 7 GB, comfortably above the 194 MB kernel matrix. Same shape as the
-existing `fundamentals.yml`.
-
-Output tables `bank_index_score` and `bank_index_feature` are defined in
-`db/migrations/012_index_tables.sql`, on this branch. Their columns match the model's outputs;
-note that they key on `(fdic_cert_number, quarter_end_date)` while the model works in
-`rssd_id` plus prediction date, so the writer needs one mapping step.
+The 50 feature names, Platt calibration parameters, score anchors, and training window.
+Compare against it when re-freezing to decide whether `model_version` should increment.
 
 ---
 
-## Notes for consumers
+### Two models — do not mix them
+
+`scores.parquet` and `scores_gp50_fixed_v1.csv` come from **models with different
+training cutoffs**. Both GPs fit on only 5,000 rows (2,000 positive + 3,000 negative);
+what differs is the pool they are drawn from:
+
+| | backtest | dashboard |
+|---|---|---|
+| Sampling pool | report quarters 2017Q1–**2021Q3**, 102,186 rows | report quarters 2017Q1–**2024Q1**, 149,644 rows |
+| Actually fitted on | 5,000 rows | 5,000 rows |
+| Scores | everything after 2021-12-31 | all 167,872 rows |
+
+The two purposes pull in opposite directions: the dashboard wants **as much training
+data as possible**; the backtest requires a model that **has not seen the test period**.
+Running the backtest against the production model measures memorisation; scoring the
+dashboard with the backtest model throws away three years of data.
+
+**Scores in `scores.parquet` for 2024Q1 and earlier are in-sample** — the model saw
+those rows during training. A dashboard time series must not use them; use the
+out-of-fold predictions in `oos_predictions.parquet` instead.
+
+---
+
+## Four decisions that carry the design
 
 | | |
 |---|---|
-| **Scores belong to the bank, not the group** | Goldman Sachs Bank USA is \$502B; The Goldman Sachs Group is ~\$1.6T. 103 of 104 tracked banks have a different `holding_name` and `bank_legal_name` — display the latter |
-| **Show the score and band, not the raw probability** | When the calibration period's base rate differs from the scoring period's, the probability runs high. The score is a relative ranking and is unaffected |
-| **A wide interval does not mean unreliable, and a narrow one does not mean reliable** | `latent_var` measures how far a bank sits from the training data, not how likely the prediction is to be right |
-| **The final model has no test set** | Its performance claim is inherited from walk-forward. Write every scoring run with a timestamp so it can be checked a year later — that is the only clean validation path |
+| **Widen the bank axis, not the time axis** | The NPL leg depends on `RCON1403` / `RCON1407`, which first appear in 2017Q1. Reaching back further leaves that leg permanently unable to fire, turning the label into a deposit-leg-only variant that means something different from the post-2017 one |
+| **Deposits are domestic + foreign, summed** | `RCON2200` (domestic offices) and `RCFN2200` (foreign offices) are complements, not alternatives. Taking one by priority understated deposits for 44 of the 200 largest banks on 2021Q1, five of them to zero |
+| **The feature list is fixed, not re-ranked per fold** | Ranked once on the first fold's training window (2017Q1–2018Q3); every fold and production use that same list. It is derived only from data preceding any test period, so the walk-forward numbers describe the model that ships — and the collector can fix 51 fields permanently |
+| **The last four quarters are dropped** | A label needs four forward quarters to exist. The final quarters of any extract do not have them, so their positives are silently recorded as 0 (positive rate falls 10.9% → 8.4% → 6.0% → 3.3% → 0%). Those 17,642 rows are dropped rather than left in the panel labelled 0 |
+
+---
+
+## Reading these scores
+
+| | |
+|---|---|
+| **Intervals do not indicate band membership** | The 80% interval averages 16.3 points while a band spans 10, so 67.2% of banks have an interval crossing two bands or more (21.0 points among the 104 tracked banks). Width does carry meaning, and its direction is positive — the widest quartile has roughly twice the event rate of the narrowest — but it expresses distance from the training sample, not confidence in the band |
+| **Do not display raw `distress_prob`** | Raw probabilities overstate by 2–4×; they must pass through `score.py`'s Platt calibration and quantile anchors. Ranking is unaffected |
+| **The 104 seed banks cannot validate this model** | That window holds 29–32 positives; the resulting number is uninformative in either direction. Judge this axis on the full sample or on size tiers |
+| **The final model has no test set** | Its performance claim is inherited from walk-forward. The only clean check is to write every scoring run with a timestamp and revisit a year later |
+| **All 50 features are raw MDRM codes** | `RCL_3814`, `RCRII_S442`, and so on — no readable names, not suitable for per-feature display to end users |
+
+---
+
+## To do: deployment (next batch)
+
+This round ships the model and the report only; the scoring path is not built.
+
+**When to start**: once the team has read REPORT §5–6 and agreed the performance is
+acceptable. **Do not gate on the §7.3 backtest number** — that scope holds 29–32
+positives, so it cannot come back "good" or "bad" in any meaningful sense.
+
+Items 1, 3 and 6 depend only on the 51-field list, which is already fixed; they do not
+wait on the model being final.
+
+### Six things to write
+
+| # | Item | Notes |
+|---|---|---|
+| 1 | **Input-table migration** `014_index_model_input.sql` | 51 fields (50 features + `RC_2170` total assets as denominator) plus `rssd_id` and `report_date`. **Watch the number**: 012 is this axis's output table (already on the branch), 013 is taken by the OCC table on branch `SH` |
+| 2 | **Frozen training set** | Generate `train_sample.parquet` (5,000 rows × 50 features, ~2 MB) and `frozen_params.json` (medians / scaler / Platt / anchors), then commit both |
+| 3 | **Collector** `pipeline/poll_ffiec_model_input.py` | Pull the latest FFIEC quarter → reuse `extract.py`'s prefix-coalescing → keep those 51 fields → upsert into the input table |
+| 4 | **Scoring script** `index/fundamentals/score_quarter.py` | Read the latest quarter plus the frozen training set → fit the GP (~60 s) → map through `score.py` → write `bank_index_score` |
+| 5 | **Historical backfill** | A dashboard time series needs history |
+| 6 | **Workflow** `.github/workflows/index_score.yml` | Quarterly schedule, same shape as the existing `fundamentals.yml` |
+
+### Design notes
+
+**The input table needs 51 fields, not all 529.** The full pool is only needed when
+re-freezing the model, and `extract.py` can regenerate it from source then — no
+long-term storage required.
+
+**Why freeze a training set instead of saving the model.** A GP's predictions depend
+on its entire training set plus an n×n kernel matrix — roughly 194 MB serialised, and
+fragile across scikit-learn versions. Committing 5,000 training rows (~2 MB) plus a
+parameter file lets each quarter refit in about 60 seconds. **Same rows, same seed →
+identical fit every time**, which is what keeps scores comparable across quarters;
+resampling each quarter would let scores drift for reasons unrelated to the banks.
+
+**Quarterly flow** pull the latest quarter → keep 51 fields → read the frozen sample
+and fit → score → write `bank_index_score`. To upgrade, move the training cutoff,
+re-freeze, and increment `model_version` — that column marks which scores came from
+the same yardstick.
+
+### Two decisions to make first
+
+**1. Which scores to backfill (item 5).** The production model is in-sample for 2024Q1
+and earlier, so backfilling directly makes the dashboard's history look better than it
+is. Options: backfill only the out-of-sample quarters, use the out-of-fold predictions
+in `oos_predictions.parquet`, or backfill and record the provenance in the table.
+
+**2. Refit frequency.** The current model trains through 2024Q1 and goes stale with
+age. The test noted in REPORT §8.1 — how much annual folding wastes by holding the
+`cut` constant across a fold — has not been run, and its answer decides whether to
+refit quarterly or annually.
