@@ -1,0 +1,11 @@
+feature,coef_standardized,intercept
+dep_qoq,0.022574,-0.149087
+npl_ratio,0.344120,-0.149087
+npl_qoq_mult,-0.008624,-0.149087
+liquidity_ratio,0.134482,-0.149087
+urel_loss_over_assets,-0.070749,-0.149087
+tier1,-1.790390,-0.149087
+lla_ratio,0.134166,-0.149087
+cre_over_assets,-0.135462,-0.149087
+log_assets,-0.315432,-0.149087
+asset_qoq,-0.021606,-0.149087

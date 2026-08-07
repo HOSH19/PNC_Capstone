@@ -121,20 +121,39 @@ def load_labels(path: Path) -> dict[tuple[int, date], dict]:
 
 
 def load_scores_csv(path: Path) -> list[dict]:
+    """Load score rows; keep first row per (fdic_cert_number, quarter_end_date).
+
+    Ming's gp50 file has a few duplicate keys (cert 32541); without dedupe the
+    harness would double-count those test rows.
+    """
     rows: list[dict] = []
+    seen: set[tuple[int, date]] = set()
+    n_dup = 0
     with path.open(newline="") as f:
         for row in csv.DictReader(f):
             score = parse_float(row.get("risk_score"))
             if score is None:
                 continue
+            cert = int(row["fdic_cert_number"])
+            qd = parse_date(row["quarter_end_date"])
+            key = (cert, qd)
+            if key in seen:
+                n_dup += 1
+                continue
+            seen.add(key)
             rows.append(
                 {
-                    "fdic_cert_number": int(row["fdic_cert_number"]),
-                    "quarter_end_date": parse_date(row["quarter_end_date"]),
+                    "fdic_cert_number": cert,
+                    "quarter_end_date": qd,
                     "risk_score": score,
                     "model_version": row.get("model_version") or path.stem,
                 }
             )
+    if n_dup:
+        print(
+            f"NOTE: dropped {n_dup} duplicate score key(s) in {path.name}",
+            file=sys.stderr,
+        )
     return rows
 
 
@@ -317,8 +336,10 @@ def run_smoke(args: argparse.Namespace) -> int:
 
 
 def run_scores(args: argparse.Namespace) -> int:
-    labels = load_labels(Path(args.labels))
-    scores = load_scores_csv(Path(args.scores))
+    labels_path = Path(args.labels).expanduser().resolve()
+    scores_path = Path(args.scores).expanduser().resolve()
+    labels = load_labels(labels_path)
+    scores = load_scores_csv(scores_path)
     test = join_test(
         scores, labels, parse_date(args.split_date), parse_date(args.test_end)
     )
@@ -330,7 +351,7 @@ def run_scores(args: argparse.Namespace) -> int:
         [result],
         split_date=parse_date(args.split_date),
         test_end=parse_date(args.test_end),
-        labels_path=Path(args.labels),
+        labels_path=labels_path,
     )
     # Single-model report still uses the multi-model table shape.
     print(report)

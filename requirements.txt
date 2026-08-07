@@ -3,3 +3,9 @@ psycopg[binary]>=3.1
 yfinance>=0.2
 feedparser>=6.0
 beautifulsoup4>=4.12
+
+# evals/ratio_logit (interpretable fundamentals rival)
+numpy>=1.26
+pandas>=2.0
+scikit-learn>=1.4
+xgboost>=2.0
