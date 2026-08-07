@@ -39,7 +39,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-OUT = os.environ.get("MODEL_OUT", "/tmp/index_v4")
+OUT = os.environ.get("MODEL_OUT", "/tmp/index_fundamentals")
 # The distress label needs a prior quarter to compute the event rule and four
 # forward quarters to close, so the usable panel is 2017Q2-2025Q1. With a
 # one-year embargo the first fold that gets a workable training window is 2020;
@@ -52,6 +52,18 @@ XGB_TIERS = [5, 10, 22, 50, 100]
 # distances concentrate; if gp50 collapses, check length_scale before concluding
 # it is the dimension — the sqrt(dim)*1.5 heuristic was tuned on 3-12.
 GP_DIMS = [3, 5, 8, 12, 22, 50]
+# The list that ships. Every model above re-ranks features inside each fold, which
+# measures a "re-select features every time" procedure rather than the one thing
+# that can actually be deployed: a collector cannot pull a different 50 fields each
+# quarter. So the first fold's ranking is frozen and every later fold reuses it —
+# derived only from data preceding any test period, so the folds still evaluate
+# out-of-sample.
+#
+# This used to live in a throwaway script under /tmp. models.py computed the
+# ranking, used it, and discarded it; nothing wrote fixed_order.json and no @fixed
+# variant existed here, so the report's headline model could not be rebuilt from
+# this repo and final_model.py could not run at all. The ranking is persisted now.
+FIXED_DIMS = [int(x) for x in os.environ.get("FIXED_DIMS", "50").split(",")]
 # The failure label had 1,919 positives and kept every one. This label has
 # ~17.5k, far past what an O(n^3) GP can fit, so both sides are sampled and the
 # ratio is held at 1:1.5 rather than left at the panel's 1:10.
@@ -141,10 +153,11 @@ def main():
         n0 = len(feats)
         feats = [f for f in feats
                  if not f.startswith(SAMESOURCE) and f not in SAMESOURCE_ITEMS]
-        log(f"剔除与标签同源的字段: {n0} -> {len(feats)}")
-    log(f"面板 {len(d):,} 行 | {int(d.y.sum()):,} 正例 | 候选特征 {len(feats)}")
+        log(f"dropped label-adjacent fields: {n0} -> {len(feats)}")
+    log(f"panel {len(d):,} rows | {int(d.y.sum()):,} positives | {len(feats)} candidate features")
 
     rows, votes, lvs, oos = [], {f: 0 for f in feats}, [], []
+    fixed = None
     for Y in range(FIRST_TEST, LAST_TEST + 1):
         te = d[d.year == Y]
         if len(te) == 0:
@@ -158,7 +171,7 @@ def main():
         cut = te.qd.min() - pd.Timedelta(days=366)
         tr = d[d.qd <= cut]
         if tr.y.sum() < 200 or te.y.sum() < 50:
-            log(f"{Y}: 跳过(测试正例 {int(te.y.sum())})")
+            log(f"{Y}: skipped (test positives {int(te.y.sum())})")
             continue
         ytr, yte = tr.y.values, te.y.values
 
@@ -166,6 +179,16 @@ def main():
             ascending=False).index.tolist()
         for f in order[:30]:
             votes[f] += 1
+
+        # Frozen on the first fold that runs, then reused unchanged. Written out
+        # so final_model.py and the collector read the same list this run scored.
+        if fixed is None:
+            fixed = order
+            with open(f"{OUT}/fixed_order.json", "w") as fh:
+                json.dump({"all": fixed, "fold": Y,
+                           "train_until": str(cut.date())}, fh)
+            log(f"fixed feature list taken from fold {Y} "
+                f"(training cut {cut.date()}) -> {OUT}/fixed_order.json")
 
         preds = {}
         for n in XGB_TIERS:
@@ -178,6 +201,15 @@ def main():
                                  te[sub].fillna(med).values, dim)
             preds[f"gp{dim}"] = (p, sub)
             lvs.append({"year": Y, "dim": dim, "lv_median": float(np.median(lv)),
+                        "gp_train_rows": used})
+        for dim in FIXED_DIMS:
+            sub = fixed[:dim]
+            med = tr[sub].median()
+            p, lv, used = fit_gp(tr[sub].fillna(med).values, ytr,
+                                 te[sub].fillna(med).values, dim)
+            preds[f"gp{dim}@fixed"] = (p, sub)
+            lvs.append({"year": Y, "dim": dim, "fixed": True,
+                        "lv_median": float(np.median(lv)),
                         "gp_train_rows": used})
         rk = lambda x: pd.Series(x).rank(pct=True).values
         preds["gp5+xgb10"] = ((rk(preds["gp5"][0]) + rk(preds["xgb10"][0])) / 2, [])
@@ -202,7 +234,7 @@ def main():
             mb = metrics(yte[big.values], p[big.values])
             if mb:
                 rows.append({"year": Y, "model": f"{name}@D9", "feats": "", **mb})
-        log(f"{Y}: 训练 {len(tr):,}/{int(ytr.sum())}正 → 测试 {len(te):,}/{int(yte.sum())}正")
+        log(f"{Y}: train {len(tr):,}/{int(ytr.sum())} pos -> test {len(te):,}/{int(yte.sum())} pos")
 
     r = pd.DataFrame(rows)
     r.to_csv(f"{OUT}/per_fold.csv", index=False)
@@ -212,11 +244,11 @@ def main():
             f"{OUT}/oos_predictions.parquet", index=False)
 
     agg = (r.groupby("model").apply(lambda g: pd.Series({
-        "折": len(g), "正例": int(g.pos.sum()),
+        "folds": len(g), "pos": int(g.pos.sum()),
         "PR-AUC": np.average(g.prauc, weights=g.pos),
         "lift": np.average(g.lift, weights=g.pos),
         "ROC": np.average(g.roc, weights=g.pos),
-        "top100和": int(g.hits_at_100.sum()),
+        "hits@100": int(g.hits_at_100.sum()),
         "recall@100": g.hits_at_100.sum() / g.pos.sum(),
         "recall@500": np.average(g.recall_at_500, weights=g.pos)}))
         .sort_values("PR-AUC", ascending=False))
@@ -225,21 +257,21 @@ def main():
     n_folds = r.year.nunique()
     stab = pd.Series(votes).sort_values(ascending=False)
     stab.to_csv(f"{OUT}/stability.csv")
-    log(f"\n=== 特征稳定性({n_folds} 折,进 top-30 的折数)===")
+    log(f"\n=== feature stability ({n_folds} folds, times in the top 30) ===")
     for f, v in stab.head(15).items():
         log(f"  {v:2d}/{n_folds}  {f}")
 
-    log(f"\n=== 模型对照(按正例加权)===")
-    log(f"{'模型':<16}{'折':>4}{'正例':>6}{'PR-AUC':>9}{'lift':>9}{'ROC':>8}"
+    log(f"\n=== model comparison (weighted by positives) ===")
+    log(f"{'model':<16}{'folds':>6}{'pos':>7}{'PR-AUC':>9}{'lift':>9}{'ROC':>8}"
         f"{'top100':>8}{'recall@500':>12}")
     for m, x in agg.iterrows():
-        log(f"{m:<16}{int(x['折']):>4}{int(x['正例']):>6}{x['PR-AUC']:>9.3f}"
-            f"{x['lift']:>9.1f}{x['ROC']:>8.3f}{int(x['top100和']):>8}"
+        log(f"{m:<16}{int(x['folds']):>6}{int(x['pos']):>7}{x['PR-AUC']:>9.3f}"
+            f"{x['lift']:>9.1f}{x['ROC']:>8.3f}{int(x['hits@100']):>8}"
             f"{x['recall@500']*100:>11.1f}%")
 
     lv = pd.DataFrame(lvs).groupby("dim").lv_median.median()
-    log(f"\nGP latent_var 中位数(越小区间越窄): {dict(lv.round(3))}")
-    log(f"\n写入 {OUT}/summary.csv, per_fold.csv, stability.csv, latent_var.csv")
+    log(f"\nGP latent_var medians (smaller = narrower intervals): {dict(lv.round(3))}")
+    log(f"\nwrote {OUT}/summary.csv, per_fold.csv, stability.csv, latent_var.csv")
 
 
 if __name__ == "__main__":

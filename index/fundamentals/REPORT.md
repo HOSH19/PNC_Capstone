@@ -106,10 +106,9 @@ bank with foreign deposits.
 | FFIEC raw fields | 1,576 |
 | [1] Stability: present in ≥90% of modelled quarters | 1,198 |
 | [2] Missingness vs label: coverage gap ≤10%, both sides >70% | 906 |
-| [3] Missingness vs size: top 1% vs the rest, gap ≤10% | 866 (**24 caught only here**) |
-| [4] Drop identifiers / dates / near-constants | −388 |
-| [5] Correlation pruning \|ρ\| ≥ 0.95 (merged, not discarded) | 640 → 528 |
-| Plus the derived column `log_assets` | **529** |
+| [3] Missingness vs size: top 1% vs the rest, gap ≤10% | 866 (**40 caught only here**) |
+| [4] Drop identifiers / dates / near-constants (388 across the 1,198; 226 not already dropped above) | 640 |
+| [5] Correlation pruning \|ρ\| ≥ 0.95 (merged, not discarded), plus the derived column `log_assets` | **529** |
 
 Screen [3] is not optional: a field can show 98% overall coverage with no gap between
 positives and negatives while being missing for every large bank — the label axis
@@ -178,7 +177,9 @@ conservative.
 set, take the top N, and every fold — plus production — uses that same list. It is
 derived only from data preceding any test period, so the six folds evaluate the model
 that ships rather than a "re-select features every time" procedure; the collector can
-therefore fix 51 fields permanently (50 features plus total assets as denominator).
+therefore fix 50 raw fields permanently: the 49 MDRM items among the 50 features, plus
+`RC_2170` total assets, which serves both as the denominator and as the source of the
+derived `log_assets`.
 
 ---
 
@@ -210,7 +211,7 @@ therefore fix 51 fields permanently (50 features plus total assets as denominato
 | Random baseline | **equals the base rate** (0.0906 across the test folds) | **0.5** |
 | Below the baseline means | the top of the list is worse than chance | **the ranking is inverted** (see the naive baseline at 0.42, §5.3) |
 | Weighted toward | **the top of the list** — rank 100 counts far more than rank 5,000 | **the whole ranking** — all thresholds equally |
-| Affected by base rate | **Yes.** 0.2755 (base rate 9.06%) and 0.0589 (2.56%) cannot be compared directly | No — comparable across periods and scopes |
+| Affected by base rate | **Yes.** 0.2701 (base rate 9.06%) and 0.0589 (2.56%) cannot be compared directly | No — comparable across periods and scopes |
 | When to use it | building a watchlist of the top N banks | checking the model's direction, comparing across scopes |
 
 "Lift over baseline" = PR-AUC ÷ base rate, i.e. how many times better than random.
@@ -224,7 +225,10 @@ ROC-AUC; the two metrics pick different winners, which places the difference at 
 top of the ranking rather than in the overall ordering.
 
 The table above re-ranks features per fold. With the fixed list (§4), `gp50@fixed`
-scores **PR-AUC 0.2755 / ROC-AUC 0.7701** — the highest ROC-AUC of any candidate.
+scores **PR-AUC 0.2701 / ROC-AUC 0.7664**, marginally ahead of the per-fold gp50 on
+PR-AUC and marginally behind it on ROC-AUC. The fixed list is not chosen for being the
+highest-scoring variant — it is the only one that can be deployed, since a quarterly
+collector cannot pull a different 50 fields each time.
 
 ### 5.2 Per-fold performance
 
@@ -232,21 +236,22 @@ scores **PR-AUC 0.2755 / ROC-AUC 0.7701** — the highest ROC-AUC of any candida
 
 | Fold | Test rows | Positives | Base rate | PR-AUC | ROC-AUC | Lift |
 |---|---|---|---|---|---|---|
-| 2020 | 20,588 | 1,707 | 8.29% | 0.2280 | 0.7561 | 2.75× |
-| 2021 | 20,037 | 1,411 | 7.04% | 0.2445 | 0.7821 | 3.47× |
-| 2022 | 19,348 | 1,897 | 9.80% | 0.2720 | 0.7551 | 2.77× |
-| 2023 | 18,846 | 1,800 | 9.55% | 0.2997 | 0.7798 | 3.14× |
-| 2024 | 18,430 | 1,832 | 9.94% | 0.3078 | 0.7755 | 3.10× |
-| 2025 | 9,062 | 984 | 10.86% | 0.3048 | 0.7784 | 2.81× |
-| **Weighted** | **106,311** | **9,631** | **9.06%** | **0.2755** | **0.7701** | **3.00×** |
+| 2020 | 20,588 | 1,707 | 8.29% | 0.2161 | 0.7506 | 2.61× |
+| 2021 | 20,037 | 1,411 | 7.04% | 0.2467 | 0.7735 | 3.50× |
+| 2022 | 19,348 | 1,897 | 9.80% | 0.2668 | 0.7427 | 2.72× |
+| 2023 | 18,846 | 1,800 | 9.55% | 0.2871 | 0.7751 | 3.01× |
+| 2024 | 18,430 | 1,832 | 9.94% | 0.3064 | 0.7820 | 3.08× |
+| 2025 | 9,062 | 984 | 10.86% | 0.3053 | 0.7848 | 2.81× |
+| **Weighted** | **106,311** | **9,631** | **9.06%** | **0.2701** | **0.7664** | **2.95×** |
 
 `Lift = PR-AUC ÷ base rate`, used to compare folds whose base rates differ — the 2025
-fold's PR-AUC is 25% above 2021's, but mostly because its base rate is higher; on lift,
-2021 (3.47×) is the strongest. The weighted row's base rate is the six test sets
+fold's PR-AUC is 24% above 2021's, but mostly because its base rate is higher; on lift,
+2021 (3.50×) is the strongest. The weighted row's base rate is the six test sets
 combined, not the panel's 9.61% (which includes training rows).
 
-PR-AUC climbs monotonically from 0.228 to 0.308, tracking the growth of the training
-set; ROC-AUC holds between 0.755 and 0.782. **No sign of decay over time.**
+PR-AUC climbs from 0.216 to 0.306 across the first five folds, tracking the growth of
+the training set, and holds at 0.305 in the sixth; ROC-AUC stays between 0.743 and
+0.785 throughout. **No sign of decay over time.**
 
 ### 5.3 Against baselines
 
@@ -254,16 +259,16 @@ Four baselines, each answering a different question:
 
 | Baseline | What it is | PR-AUC | ROC-AUC | gp50 ÷ it |
 |---|---|---|---|---|
-| **gp50@fixed** | the model currently selected | **0.2755** | **0.7701** | — |
-| Logistic regression, 12 vars | linear model on the top 12 features | 0.1932 | 0.6909 | 1.43× |
-| Best single feature | highest-AUC single field among the 529 | 0.1332 | 0.6356 | 2.07× |
-| Random | random ordering | 0.0932 | 0.5028 | 2.96× |
-| **Naive −tier1** | `risk = −tier-1 capital ratio`, one line, no fitting | **0.0823** | **0.4208** | **3.35×** |
+| **gp50@fixed** | the model currently selected | **0.2701** | **0.7664** | — |
+| Logistic regression, 12 vars | linear model on the top 12 features | 0.1932 | 0.6909 | 1.40× |
+| Best single feature | highest-AUC single field among the 529 | 0.1332 | 0.6356 | 2.03× |
+| Random | random ordering | 0.0932 | 0.5028 | 2.90× |
+| **Naive −tier1** | `risk = −tier-1 capital ratio` from `fact_call_report`, one line, no fitting | **0.0823** | **0.4208** | **3.28×** |
 
 - **Random 0.0932 ≈ the test base rate 0.0906** — the evaluation pipeline is self-consistent
-- **2.07× the best single feature** — combining features is worth something
-- **1.43× a 12-variable logistic regression** — non-linearity is worth something
-- **3.35× the naive rule, winning all six folds** — the machine learning earns its complexity
+- **2.03× the best single feature** — combining features is worth something
+- **1.40× a 12-variable logistic regression** — non-linearity is worth something
+- **3.28× the naive rule, winning all six folds** — the machine learning earns its complexity
 
 The naive `−tier1` baseline scores ROC-AUC 0.42 — below 0.5, i.e. inverted — and grows
 **more** inverted among larger banks (0.31 on the top decile). Capital adequacy is not a
@@ -277,16 +282,16 @@ the year**.
 
 | List | Banks | Share | Caught | Recall | Precision |
 |---|---|---|---|---|---|
-| top 200 rows | 106 | 2.2% | 67 | 9.3% | **63.2%** |
-| top 500 rows | 259 | 5.4% | 136 | 19.0% | 52.5% |
-| top 1000 rows | 459 | 9.6% | 200 | 27.9% | 43.6% |
-| top 2000 rows | 811 | 17.0% | 312 | 43.5% | 38.5% |
+| top 200 rows | 115 | 2.4% | 68 | 9.5% | **59.1%** |
+| top 500 rows | 247 | 5.2% | 128 | 17.9% | 51.8% |
+| top 1000 rows | 462 | 9.7% | 204 | 28.5% | 44.2% |
+| top 2000 rows | 802 | 16.8% | 311 | 43.4% | 38.8% |
 
-Watching 106 banks, roughly 63% do trigger within the year — **4.2×** the 15.0% base
+Watching 115 banks, roughly 59% do trigger within the year — **3.9×** the 15.0% base
 rate.
 
-**Recall is structurally low** — 717 banks will have an event and the list holds 106;
-no amount of precision fits them in. Reaching 43.5% recall takes a list of 811. When
+**Recall is structurally low** — 717 banks will have an event and the list holds 115;
+no amount of precision fits them in. Reaching 43.4% recall takes a list of 802. When
 events are common and diffuse, high recall requires a large list.
 
 ### 5.5 Raw probabilities need calibration
@@ -295,12 +300,12 @@ events are common and diffuse, high recall requires a large list.
 
 | Decile | Mean prediction | Actual rate |
 |---|---|---|
-| lowest | 4.5% | 1.0% |
-| median | 26.1% | 5.8% |
-| ninth | 50.9% | 19.2% |
-| highest | 68.1% | 32.6% |
+| lowest | 4.6% | 0.9% |
+| fifth | 22.4% | 5.0% |
+| ninth | 51.4% | 19.5% |
+| highest | 68.0% | 31.7% |
 
-A systematic 2–4× overstatement. **Raw `distress_prob` must not be displayed**; it has
+A systematic overstatement, 2.1× at the top of the ranking and 5.1× at the bottom. **Raw `distress_prob` must not be displayed**; it has
 to pass through `score.py`'s Platt calibration and quantile anchors. Ranking is
 unaffected.
 
@@ -318,7 +323,7 @@ does not produce; supplying them would mean bolting on a bootstrap ensemble or
 Venn-Abers predictor.
 
 **Two — the gap to XGBoost is small, and comes from data volume rather than the model.**
-PR-AUC 0.2755 vs 0.2940 (6.7% behind), while ROC-AUC is higher for the GP. The GP is
+PR-AUC 0.2701 vs 0.2940 (8.1% behind), while ROC-AUC is higher for the GP. The GP is
 capped at 5,000 rows per fold by its O(n³) cost (2,000 positive + 3,000 negative), where
 XGBoost uses every training row — 145,021 by the last fold. Running XGBoost on the
 **same 5,000-row subsample**:
@@ -345,24 +350,24 @@ the extra data improves precision at the top, not the overall ordering.
 50 dimensions carry **17×** the variance of 3, roughly 4× the interval width — the
 distance-concentration effect of kernel methods, where every point looks "far from the
 training data" in high dimensions. **Raising GP accuracy costs exactly the interval
-quality that motivates using a GP**: the 80% interval averages 16.3 points against a
-band width of 10, so **67.2% of banks have an interval spanning two bands or more**
+quality that motivates using a GP**: the 80% interval averages 16.2 points against a
+band width of 10, so **66.8% of banks have an interval spanning two bands or more**
 (§7.1). Dropping to 12 dimensions preserves the intervals but takes PR-AUC to 0.222
-(19% lower).
+(17.9% lower).
 
 ### 6.3 Note: how XGBoost performs
 
-`xgb100` leads on full-sample PR-AUC by 6.7% (0.2940 vs 0.2755) and is stronger at the
-top of the 2023 operating table (75.2% precision over the first 101 banks, against the
-GP's 63.2%). **If the product scope widens to all 5,994 banks, or the interval columns
+`xgb100` leads on full-sample PR-AUC by 8.1% (0.2940 vs 0.2701) and is stronger at the
+top of the 2023 operating table (70.8% precision over the first 106 banks, against the
+GP's 59.1%). **If the product scope widens to all 5,994 banks, or the interval columns
 stop being required, the choice should be revisited.**
 
 The three scopes disagree, which is worth recording:
 
 | Scope | Better |
 |---|---|
-| Full-sample PR-AUC | XGBoost (+6.7%) |
-| Full-sample ROC-AUC | **GP** (+1.6%) |
+| Full-sample PR-AUC | XGBoost (+8.1%) |
+| Full-sample ROC-AUC | **GP** (+1.1%) |
 | Top of the full-sample operating table | XGBoost (+12 points of precision) |
 
 ---
@@ -377,34 +382,34 @@ banks, including all 104 seed banks.
 
 | Band | Latest quarter | Panel rows | Actual event rate |
 |---|---|---|---|
-| sound (≥90) | 3,110 | 108,949 | **3.8%** |
-| neutral (80–90) | 888 | 38,988 | 13.8% |
-| distress (≤80) | 521 | 19,935 | **32.9%** |
+| sound (≥90) | 3,083 | 110,561 | **3.9%** |
+| neutral (80–90) | 919 | 38,587 | 14.6% |
+| distress (≤80) | 517 | 18,724 | **33.3%** |
 
-Band separation is **8.6×** from sound to distress, monotone. Scores span 50.3 to 100.0.
+Band separation is **8.6×** from sound to distress, monotone. Scores span 50.0 to 100.0.
 
-**Intervals cannot indicate band membership.** The 80% interval averages **16.3
+**Intervals cannot indicate band membership.** The 80% interval averages **16.2
 points** and the 95% interval 23.3, while the neutral band spans only 10:
 
 | Bands spanned by the 80% interval | Share |
 |---|---|
-| 1 | 32.8% |
-| 2 | 35.5% |
-| 3 (all) | 31.7% |
+| 1 | 33.2% |
+| 2 | 35.8% |
+| 3 (all) | 31.0% |
 
-**67.2% of banks have an 80% interval spanning two bands or more** — a bank labelled
+**66.8% of banks have an 80% interval spanning two bands or more** — a bank labelled
 neutral routinely has an interval covering both distress and sound.
 
 **Among the 104 banks the dashboard displays, the effect is larger.** Their 2025Q1 band
-distribution is healthier than the full sample (sound 76.9% vs 68.8%, distress 2.9% vs
-11.5%, median score 96.8 vs 95.0), but the interval averages **21.0 points** against
+distribution is healthier than the full sample (sound 81.7% vs 68.2%, distress 3.8% vs
+11.4%, median score 97.5 vs 94.9), but the interval averages **17.9 points** against
 14.9 overall:
 
 | IDRSSD | Score | Band | 80% interval |
 |---|---|---|---|
-| 962966 | 67.8 | distress | **50.0 – 98.6** |
-| 3394278 | 72.6 | distress | 50.6 – 96.7 |
-| 963945 | 74.4 | distress | 51.6 – 96.6 |
+| 963945 | 72.0 | distress | **50.0 – 97.2** |
+| 962966 | 77.2 | distress | **50.0 – 99.5** |
+| 1394676 | 77.5 | distress | 51.5 – 97.3 |
 
 The three lowest-scoring banks have intervals **spanning all three bands**. The cause is
 that `latent_var` measures distance from the training data, and these 104 banks are the
@@ -416,14 +421,14 @@ mid-sized banks.
 
 | Width quartile | Rows | Positives | Actual event rate | ROC-AUC |
 |---|---|---|---|---|
-| narrowest 25% | 4,712 | 328 | **6.96%** | 0.7265 |
-| narrow | 4,711 | 390 | 8.28% | 0.7570 |
-| wide | 4,711 | 436 | 9.25% | 0.7842 |
-| **widest 25%** | 4,712 | 646 | **13.71%** | **0.8003** |
+| narrowest 25% | 4,712 | 318 | **6.75%** | 0.7352 |
+| narrow | 4,711 | 386 | 8.19% | 0.7683 |
+| wide | 4,711 | 446 | 9.47% | 0.7648 |
+| **widest 25%** | 4,712 | 650 | **13.79%** | **0.7869** |
 
-**The widest quartile has nearly twice the event rate of the narrowest, and the model
-ranks it more accurately.** The Spearman correlation between `latent_var` and absolute
-prediction error is +0.07 — essentially none — so "wide interval = the model is unsure"
+**The widest quartile has twice the event rate of the narrowest, and the model
+ranks it at least as accurately.** The Spearman correlation between `latent_var` and
+absolute prediction error is +0.09 — essentially none — so "wide interval = the model is unsure"
 does not hold. The accurate reading is: **a wide interval means this bank differs from
 most of the training sample, which means higher risk.** It is not junk data; it simply
 is not a band-membership confidence.
@@ -437,7 +442,8 @@ when rendering, consistent with 012's own comment (*consumers must treat any fea
 as optional and render only what is present*). **No schema change is needed; every
 other column fills and displays as usual.**
 
-**All 50 features are raw MDRM item codes** (`RCL_3814`, `RCRII_S442`, …) with no
+**49 of the 50 features are raw MDRM item codes** (`RCL_3814`, `RCRII_S442`, …; the
+fiftieth is the derived `log_assets`) with no
 readable names. Expanding `bank_index_feature` per feature gives 50 rows per bank, which
 is not suitable for end users as-is.
 
@@ -456,6 +462,12 @@ is the raw GP probability (higher = riskier), uncalibrated — the protocol's me
 all rank-based, so calibration would not change them and only adds a step where the two
 sides could diverge.
 
+**These scores predate the fixed list in this report and cannot be regenerated.** The
+list they were produced with was never written to disk (§9), so the delivered file is
+kept as an artefact of the run that produced it rather than as something the pipeline
+reproduces. Nothing downstream depends on regenerating it: the backtest has been run,
+and any future run should use `fixed_order.json`, which the pipeline now emits.
+
 **Verified to run against `evals/backtest.py`**:
 
 | model_version | n_test | n_pos | PR-AUC | precision@50 | recall@budget=10 |
@@ -472,41 +484,59 @@ window where the sentiment axis has coverage will change the numbers.
 
 ### 7.3 Before running the backtest: this scope cannot measure the model
 
-**Same model, same window (test 2022–2024), same pooled metric — only the bank scope
-changes:**
+**Same model, same window (report quarters 2022Q1–2024Q4), same pooled metric — only
+the bank scope changes:**
 
 | Bank scope | Labels | Test rows | Positives | Base rate | PR-AUC | Lift | ROC-AUC | Naive −tier1 |
 |---|---|---|---|---|---|---|---|---|
-| All 5,994 | this report | 56,280 | 5,592 | 9.94% | 0.2979 | **3.00×** | 0.7701 | 0.0881 |
-| Top 50% | this report | 28,137 | 2,075 | 7.37% | 0.2868 | **3.89×** | 0.7815 | 0.0648 |
-| Top 10% | this report | 5,633 | 358 | 6.36% | 0.3052 | **4.80×** | 0.8072 | 0.0431 |
-| 104 seed banks | this report | 1,251 | **29** | 2.32% | 0.0459 | **1.98×** | 0.7184 | 0.1327 |
-| 104 seed banks | `distress_bank_quarter.csv` | 1,251 | **32** | 2.56% | 0.0589 | 2.30× | — | 0.1342 |
+| All filers | this report | 56,280 | 5,592 | 9.94% | 0.2910 | **2.93×** | 0.7697 | 0.0881 |
+| Top 50% | this report | 28,149 | 2,079 | 7.39% | 0.2899 | **3.93×** | 0.7864 | 0.0657 |
+| Top 10% | this report | 5,635 | 358 | 6.35% | 0.3011 | **4.74×** | 0.8028 | 0.0444 |
+| 104 seed banks | this report | 1,248 | **29** | 2.32% | 0.0755 | **3.25×** | 0.7041 | 0.1327 |
 
-The last row is what `evals/backtest.py` actually reports. The three-label difference
-between the last two rows traces to the deposit basis in §8.3.
+**The model works on the full sample, the top 50% and the top 10%, and gets better as
+banks get larger (2.93× → 4.74×).** On the 104 seed banks it reads 3.25× — but that
+number carries almost no information, for two reasons.
 
-**The model works on the full sample, the top 50%, and the top 10% — and gets better
-as banks get larger (3.00× → 4.80×). It falls to 1.98× only on these 104 banks**, which
-are themselves inside the top 10%.
+**First, it is unstable.** The scores delivered for backtesting came from an earlier
+fixed feature list; everything else — panel, folds, method, labels — was identical.
+Swapping that list for the current one moves the pooled PR-AUC like this:
+
+| Scope | Delivered list | Current list | Change |
+|---|---|---|---|
+| All 5,994 | 0.2979 | 0.2910 | **−2.3%** |
+| 104 seed banks | 0.0459 | 0.0755 | **+64%** |
+
+A change that barely registers on 5,592 positives moves the 104-bank reading by
+two-thirds. With 29 events the metric is measuring which handful of banks happened to
+land near the top, not whether the model ranks risk.
+
+**Second, a rule with no predictive power beats it on this scope.** `−tier1` scores
+ROC-AUC 0.42 on the full sample — inverted, worse than random — yet on these 104 banks
+it reaches PR-AUC 0.1327 against the model's 0.0755. Any ranking that puts a known-bad
+rule first is not ranking anything.
 
 **Their event rate is a third of comparably-sized peers:**
 
 | Size tier | All | of which seed banks | Non-seed at the same size |
 |---|---|---|---|
-| Top 2% | 109 banks · 4.16% | 71 banks · **2.16%** | 38 banks · 8.72% |
-| Top 5% | 263 banks · 5.25% | 105 banks · **2.32%** | 158 banks · 7.57% |
-| Top 10% | 530 banks · 6.35% | 105 banks · **2.32%** | 425 banks · 7.50% |
+| Top 2% | 109 banks · 4.16% | 70 banks · **2.17%** | 39 banks · 8.65% |
+| Top 5% | 263 banks · 5.25% | 104 banks · **2.33%** | 159 banks · 7.56% |
+| Top 10% | 530 banks · 6.35% | 104 banks · **2.33%** | 426 banks · 7.50% |
 
 The seed banks sit at a median asset percentile of 98.4. Even against non-seed banks of
 the same size they have two-thirds fewer distress events — this set was chosen for
 prominence and news coverage, which selects for stability.
 
-**Conclusion: a backtest on this scope cannot judge the model.** With 29–32 events, and
-a population whose distress pattern differs from the bulk of the training sample, the
-number is uninformative in either direction — within the same window a rule with no
-predictive power (`−tier1`, ROC-AUC 0.42 on the full sample) scores *higher* (0.1342 vs
-0.0589), which is itself evidence that rankings on this sample cannot be trusted.
+**What `evals/backtest.py` reported** on the delivered scores, against
+`distress_bank_quarter.csv`: PR-AUC 0.0589 on 1,251 rows / 32 positives. The
+three-label difference from the row above traces to the deposit basis in §8.3. That
+result stands as run; it is not reproducible from this repo, because the feature list
+behind those scores was never persisted (§9).
+
+**Conclusion: a backtest on this scope cannot judge the model.** Not because the result
+came back low — with the current list it comes back higher — but because 29 events
+cannot separate a good ranking from a lucky one, in either direction.
 
 **Recommendation**: to judge this axis's predictive ability, evaluate on the full sample
 or by size tier (the first three rows). Treat the 104-bank result as a product-surface
@@ -518,17 +548,17 @@ reference, not as evidence about the model.
 
 ### 8.1 What the model can and cannot do
 
-**Label-adjacent fields contribute 15–20%.** Re-ranking after dropping all 144 of them:
+**Label-adjacent fields contribute 9–19%.** Re-ranking after dropping all 144 of them:
 
 | | Full pool, 529 | Clean pool, 385 | Drop |
 |---|---|---|---|
-| gp50@fixed | 0.2755 | 0.2093 | −24.0% |
+| gp50@fixed | 0.2701 | 0.2187 | −19.0% |
 | xgb100 | 0.2940 | 0.2514 | −14.5% |
 | gp12 | 0.2219 | 0.2015 | −9.2% |
 
-What remains is PR-AUC 0.209 / ROC-AUC 0.718, still 2.2× the random baseline. `RC_2200`
-(total deposits) alone is worth about 4 points. gp12 drops only 9.2% against gp50's 24%,
-placing the label-adjacent fields mostly in ranks 12–50.
+What remains is PR-AUC 0.219 / ROC-AUC 0.719, still 2.35× the random baseline. gp12
+drops only 9.2% against gp50's 19%, placing the label-adjacent fields mostly in ranks
+12–50.
 
 Keeping them is defensible — the current NPL level genuinely affects whether NPL will
 rise 1.5×, a real economic relationship. But it bounds the claim: **the model ranks
@@ -610,7 +640,8 @@ that table.
 |---|---|---|
 | `extract.py` | Downloads quarterly FFIEC archives, parses 17 schedules, coalesces prefixes by MDRM item | ~60 min |
 | `features.py` | Builds the labelled panel, five screens | ~15 min |
-| `models.py` | 6-fold walk-forward, 5 XGBoost tiers × 6 GP dimensions + an ensemble | ~25 min |
+| `mdrm_names.py` | Extracts MDRM field descriptions from the archives | ~2 min |
+| `models.py` | 6-fold walk-forward, 5 XGBoost tiers × 6 GP dimensions + the fixed list | ~30 min |
 | `final_model.py` | Fits on label-closed rows, calibrates, scores | ~5 min |
 
 ```bash
@@ -619,3 +650,25 @@ python3 index/fundamentals/features.py
 python3 index/fundamentals/models.py        # DROP_SAMESOURCE=1 runs the label-adjacent-fields control
 MODEL_DIM=50 python3 index/fundamentals/final_model.py
 ```
+
+`mdrm_names.json` is committed, so `mdrm_names.py` only needs running when the field set
+changes. Everything else in the table above is reproducible from source: same archives,
+same seed, same numbers.
+
+**Two inputs used to be built outside the pipeline, and both were lost.** They were
+written to `/tmp` by throwaway scripts, and nothing in the repository generated them:
+
+| | Used by | Effect when absent |
+|---|---|---|
+| `mdrm_names.json` | screen [4] | The description branch dropped nobody. The candidate pool came out 534 instead of 529, silently — no warning in any log |
+| `fixed_order.json` | `final_model.py`, the `@fixed` variant | `final_model.py` could not run at all, and no code in this repository produced a fixed list |
+
+Both are now part of the pipeline: `mdrm_names.json` is committed and `features.py`
+exits with an error if it is missing, and `models.py` writes `fixed_order.json` from the
+first fold's ranking. The `@fixed` variant is a model in the fold loop like any other.
+
+The cost of the second gap is that the delivered backtest scores (§7.2) and the earlier
+`gp50@fixed` figures cannot be rebuilt — the list behind them is unknown and was not the
+first-fold ranking, since fold 2020's `@fixed` result must equal `gp50` by construction
+and the earlier numbers differ (0.2280 against 0.2161). Every figure in this report is
+from the reproducible list.

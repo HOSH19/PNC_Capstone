@@ -110,7 +110,7 @@ out-of-fold predictions in `oos_predictions.parquet` instead.
 |---|---|
 | **Widen the bank axis, not the time axis** | The NPL leg depends on `RCON1403` / `RCON1407`, which first appear in 2017Q1. Reaching back further leaves that leg permanently unable to fire, turning the label into a deposit-leg-only variant that means something different from the post-2017 one |
 | **Deposits are domestic + foreign, summed** | `RCON2200` (domestic offices) and `RCFN2200` (foreign offices) are complements, not alternatives. Taking one by priority understated deposits for 44 of the 200 largest banks on 2021Q1, five of them to zero |
-| **The feature list is fixed, not re-ranked per fold** | Ranked once on the first fold's training window (2017Q1–2018Q3); every fold and production use that same list. It is derived only from data preceding any test period, so the walk-forward numbers describe the model that ships — and the collector can fix 51 fields permanently |
+| **The feature list is fixed, not re-ranked per fold** | Ranked once on the first fold's training window (2017Q1–2018Q3); every fold and production use that same list. It is derived only from data preceding any test period, so the walk-forward numbers describe the model that ships — and the collector can fix 50 raw fields permanently |
 | **The last four quarters are dropped** | A label needs four forward quarters to exist. The final quarters of any extract do not have them, so their positives are silently recorded as 0 (positive rate falls 10.9% → 8.4% → 6.0% → 3.3% → 0%). Those 17,642 rows are dropped rather than left in the panel labelled 0 |
 
 ---
@@ -119,11 +119,11 @@ out-of-fold predictions in `oos_predictions.parquet` instead.
 
 | | |
 |---|---|
-| **Intervals do not indicate band membership** | The 80% interval averages 16.3 points while a band spans 10, so 67.2% of banks have an interval crossing two bands or more (21.0 points among the 104 tracked banks). Width does carry meaning, and its direction is positive — the widest quartile has roughly twice the event rate of the narrowest — but it expresses distance from the training sample, not confidence in the band |
+| **Intervals do not indicate band membership** | The 80% interval averages 16.2 points while a band spans 10, so 66.8% of banks have an interval crossing two bands or more (17.9 points among the 104 tracked banks). Width does carry meaning, and its direction is positive — the widest quartile has roughly twice the event rate of the narrowest — but it expresses distance from the training sample, not confidence in the band |
 | **Do not display raw `distress_prob`** | Raw probabilities overstate by 2–4×; they must pass through `score.py`'s Platt calibration and quantile anchors. Ranking is unaffected |
 | **The 104 seed banks cannot validate this model** | That window holds 29–32 positives; the resulting number is uninformative in either direction. Judge this axis on the full sample or on size tiers |
 | **The final model has no test set** | Its performance claim is inherited from walk-forward. The only clean check is to write every scoring run with a timestamp and revisit a year later |
-| **All 50 features are raw MDRM codes** | `RCL_3814`, `RCRII_S442`, and so on — no readable names, not suitable for per-feature display to end users |
+| **49 of the 50 features are raw MDRM codes** | `RCL_3814`, `RCRII_S442`, and so on — no readable names, not suitable for per-feature display to end users; the fiftieth is the derived `log_assets` |
 
 ---
 
@@ -142,16 +142,16 @@ wait on the model being final.
 
 | # | Item | Notes |
 |---|---|---|
-| 1 | **Input-table migration** `014_index_model_input.sql` | 51 fields (50 features + `RC_2170` total assets as denominator) plus `rssd_id` and `report_date`. **Watch the number**: 012 is this axis's output table (already on the branch), 013 is taken by the OCC table on branch `SH` |
+| 1 | **Input-table migration** `014_index_model_input.sql` | 50 fields (the 49 MDRM items among the features + `RC_2170` total assets, which is both the denominator and the source of `log_assets`) plus `rssd_id` and `report_date`. **Watch the number**: 012 is this axis's output table (already on the branch), 013 is taken by the OCC table on branch `SH` |
 | 2 | **Frozen training set** | Generate `train_sample.parquet` (5,000 rows × 50 features, ~2 MB) and `frozen_params.json` (medians / scaler / Platt / anchors), then commit both |
-| 3 | **Collector** `pipeline/poll_ffiec_model_input.py` | Pull the latest FFIEC quarter → reuse `extract.py`'s prefix-coalescing → keep those 51 fields → upsert into the input table |
+| 3 | **Collector** `pipeline/poll_ffiec_model_input.py` | Pull the latest FFIEC quarter → reuse `extract.py`'s prefix-coalescing → keep those 50 fields → upsert into the input table |
 | 4 | **Scoring script** `index/fundamentals/score_quarter.py` | Read the latest quarter plus the frozen training set → fit the GP (~60 s) → map through `score.py` → write `bank_index_score` |
 | 5 | **Historical backfill** | A dashboard time series needs history |
 | 6 | **Workflow** `.github/workflows/index_score.yml` | Quarterly schedule, same shape as the existing `fundamentals.yml` |
 
 ### Design notes
 
-**The input table needs 51 fields, not all 529.** The full pool is only needed when
+**The input table needs 50 fields, not all 529.** The full pool is only needed when
 re-freezing the model, and `extract.py` can regenerate it from source then — no
 long-term storage required.
 
@@ -162,7 +162,7 @@ parameter file lets each quarter refit in about 60 seconds. **Same rows, same se
 identical fit every time**, which is what keeps scores comparable across quarters;
 resampling each quarter would let scores drift for reasons unrelated to the banks.
 
-**Quarterly flow** pull the latest quarter → keep 51 fields → read the frozen sample
+**Quarterly flow** pull the latest quarter → keep 50 fields → read the frozen sample
 and fit → score → write `bank_index_score`. To upgrade, move the training cutoff,
 re-freeze, and increment `model_version` — that column marks which scores came from
 the same yardstick.

@@ -45,6 +45,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 SRC = os.environ.get("FFIEC_OUT", "/tmp/ffiec_raw")
 OUT = os.environ.get("MODEL_OUT", "/tmp/index_fundamentals")
+# Committed next to this file, not derived at runtime — see degenerate().
+MDRM_NAMES = os.environ.get(
+    "MDRM_NAMES", str(pathlib.Path(__file__).resolve().parent / "mdrm_names.json"))
 TA = "RC_2170"
 MIN_QUARTER_FRAC = 0.90      # field must appear in >=90% of MODELLED quarters
 MAX_LABEL_GAP = 0.10         # pos/neg coverage gap
@@ -93,8 +96,9 @@ def stable_fields():
         cnt.update(c for c in pq.ParquetFile(f).schema.names
                    if c not in ("IDRSSD", "quarter"))
     stable = sorted(k for k, v in cnt.items() if v >= MIN_QUARTER_FRAC * len(modelled))
-    log(f"[1] 稳定性: {len(cnt)} 个字段中 {len(stable)} 个出现在 >={MIN_QUARTER_FRAC:.0%} "
-        f"的【建模季度】({len(modelled)} 季,非全部 {len(files)} 季)")
+    log(f"[1] stability: {len(stable)} of {len(cnt)} fields appear in "
+        f">={MIN_QUARTER_FRAC:.0%} of MODELLED quarters "
+        f"({len(modelled)} of {len(files)} total)")
     return files, stable
 
 
@@ -176,17 +180,17 @@ def labels():
         keep = qs[:-HORIZON_Q] if len(qs) > HORIZON_Q else qs
         n0 = len(m)
         m = m[m.q.isin(keep)]
-        log(f"    剔除标签未闭合的 {len(qs) - len(keep)} 个财报季 "
-            f"({sorted(set(qs) - set(keep))}): {n0:,} -> {len(m):,} 行")
+        log(f"    dropped {len(qs) - len(keep)} report quarters whose label cannot close "
+            f"({sorted(set(qs) - set(keep))}): {n0:,} -> {len(m):,} rows")
 
     # Count the legs over the rows that survive, not the pre-drop frame — the
     # two used to be printed on different bases and did not add up.
     kept = m.index if not DROP_UNCLOSED else m.index
     dl, nl = dep_leg.loc[kept], npl_leg.loc[kept]
-    log(f"    标签:{int(m.y.sum()):,} 正例 / {len(m):,} 行 / "
-        f"{m[m.y == 1].rssd_id.nunique():,} 家 "
-        f"(事件 {int(m.ev.sum()):,} 个:存款腿 {int(dl.sum()):,} · "
-        f"NPL腿 {int(nl.sum()):,} · 两腿同时 {int((dl & nl).sum()):,})")
+    log(f"    labels: {int(m.y.sum()):,} positives / {len(m):,} rows / "
+        f"{m[m.y == 1].rssd_id.nunique():,} banks "
+        f"({int(m.ev.sum()):,} events: deposit leg {int(dl.sum()):,} · "
+        f"NPL leg {int(nl.sum()):,} · both {int((dl & nl).sum()):,})")
     return m.set_index(["rssd_id", "q"])[["y", "dtd", "pred_q"]]
 
 
@@ -214,8 +218,9 @@ def build(files, stable, key):
     d["year"] = d.pred_q.str[:4].astype(int)
     # dtd is NOT written to the panel. It counts quarters to the next event,
     # so anything that picked it up as a feature would be reading the answer.
-    log(f"    面板 {len(d):,} 行 | {int(d.y.sum()):,} 正例 ({d.y.mean()*100:.3f}%) "
-        f"| {d.IDRSSD.nunique():,} 家银行 | 特征季 {d.quarter.min()[:6]}~{d.quarter.max()[:6]}")
+    log(f"    panel {len(d):,} rows | {int(d.y.sum()):,} positives ({d.y.mean()*100:.3f}%) "
+        f"| {d.IDRSSD.nunique():,} banks | feature quarters "
+        f"{d.quarter.min()[:6]}~{d.quarter.max()[:6]}")
     return d
 
 
@@ -227,22 +232,41 @@ def degenerate(stable, d):
     singleton correlation clusters. RI_9106 is an ACQUISITION DATE — a YYYYMMDD
     integer divided by total assets — and RCO_A545 is an FDIC certificate
     number. Both survived every filter with AUC 0.501.
+
+    The name map is required, not optional. It used to be read from /tmp and
+    skipped when absent, which is not a degraded screen but a silent one: a
+    missing file drops nobody on the description axis and the candidate pool
+    comes out 534 instead of 529, with no warning anywhere in the log. Build it
+    with mdrm_names.py; the output is committed alongside this file.
+
+    BAD matches as a substring and has no word boundary, so two real quantities
+    are caught by accident: RC_2130 INVEST. IN UNCONSOLI(DATE)D SUBS & CO. and
+    RCO_M963 NON-AGENCY RES(IDENT)IAL MBS. Left as-is deliberately. Both are
+    noise on this label — univariate AUC 0.510 and screened out anyway
+    respectively, against 0.648 for the strongest field — and the pool of 529 in
+    REPORT §3 is defined by this behaviour, so tightening the match would move
+    the documented funnel and break reproduction of the delivered scores for no
+    measurable gain. Revisit when the feature set is next rebuilt.
     """
     import json as _json
-    names = {}
-    if os.path.exists("/tmp/mdrm_names.json"):
-        names = _json.load(open("/tmp/mdrm_names.json"))
+    if not os.path.exists(MDRM_NAMES):
+        raise SystemExit(
+            f"missing the field-description file {MDRM_NAMES}\n"
+            "  Without it screen [4]'s identifier/date branch fails silently\n"
+            "  (candidate pool comes out 534 instead of 529).\n"
+            "  Build it: python3 index/fundamentals/mdrm_names.py")
+    names = _json.load(open(MDRM_NAMES))
     BAD = ("DATE", "NUMBER", "NBR ", "CERTIFICATE", "RSSD", "IDENT", "CODE", "FLAG")
     out = []
     for c in stable:
         desc = names.get(c, "").upper()
         v = d[c]
         if any(b in desc for b in BAD) and "NBR OF FT" not in desc:
-            out.append((c, f"描述含标识符/日期: {desc[:40]}"))
+            out.append((c, f"description contains an identifier/date: {desc[:40]}"))
         elif v.notna().sum() and (v.fillna(0) == 0).mean() > 0.995:
-            out.append((c, f"{(v.fillna(0)==0).mean()*100:.1f}% 为 0"))
+            out.append((c, f"{(v.fillna(0)==0).mean()*100:.1f}% zero"))
         elif v.nunique(dropna=True) < 20:
-            out.append((c, f"仅 {v.nunique(dropna=True)} 个不同取值"))
+            out.append((c, f"only {v.nunique(dropna=True)} distinct values"))
     return dict(out)
 
 
@@ -263,12 +287,13 @@ def screen(d, stable):
     caught the bug it exists for.
     """
     s = d[d.pred_q <= SCREEN_UNTIL]
-    log(f"    筛选窗口: 预测时点 <= {SCREEN_UNTIL}({len(s):,} 行, {int(s.y.sum())} 正例)")
+    log(f"    screening window: prediction time <= {SCREEN_UNTIL} "
+        f"({len(s):,} rows, {int(s.y.sum())} positives)")
     y = s.y.values
     pos, neg = s.loc[y == 1, stable].notna().mean(), s.loc[y == 0, stable].notna().mean()
     label_gap = (neg - pos).abs()
     ok_label = (label_gap <= MAX_LABEL_GAP) & (pos > MIN_SIDE_COV) & (neg > MIN_SIDE_COV)
-    log(f"[2] 缺失 vs 标签: {int(ok_label.sum())}/{len(stable)} 通过")
+    log(f"[2] missingness vs label: {int(ok_label.sum())}/{len(stable)} pass")
 
     ta_rank = s.groupby("quarter")[TA].rank(pct=True, na_option="top")
     big_m, rest_m = ta_rank >= 1 - BIG_FRAC, ta_rank < 1 - BIG_FRAC
@@ -276,13 +301,15 @@ def screen(d, stable):
     rest = s.loc[rest_m, stable].notna().mean()
     size_gap = (rest - big).abs()
     ok_size = (size_gap <= MAX_SIZE_GAP) & (big > MIN_SIDE_COV)
-    log(f"[3] 缺失 vs 规模: {int(ok_size.sum())}/{len(stable)} 通过 "
-        f"(最大 {BIG_FRAC:.0%} vs 其余,差距<={MAX_SIZE_GAP:.0%} 且大行侧>{MIN_SIDE_COV:.0%})")
-    log(f"    仅因规模轴被剔除: {int((ok_label & ~ok_size).sum())}  ← 标签轴看不到这一类")
+    log(f"[3] missingness vs size: {int(ok_size.sum())}/{len(stable)} pass "
+        f"(top {BIG_FRAC:.0%} vs the rest, gap <={MAX_SIZE_GAP:.0%}, "
+        f"large-bank side >{MIN_SIDE_COV:.0%})")
+    log(f"    caught only by the size axis: {int((ok_label & ~ok_size).sum())}"
+        "  <- the label axis cannot see this class")
 
     deg = degenerate(stable, d)
     ok_type = pd.Series({c: c not in deg for c in stable})
-    log(f"[4] 剔除标识符/日期/近似常量: {len(deg)} 个")
+    log(f"[4] dropped identifiers / dates / near-constants: {len(deg)}")
     for c, why in list(deg.items())[:6]:
         log(f"      {c}: {why}")
 
@@ -337,7 +364,8 @@ def prune(d, feats, thresh=0.95):
         best = max(members, key=lambda c: auc[c])
         reps.append(best)
         groups[best] = members
-    log(f"[4] 相关性剪枝 |rho|>={thresh}: {len(feats)} -> {len(reps)}(合并,非丢弃)")
+    log(f"[5] correlation pruning |rho|>={thresh}: {len(feats)} -> {len(reps)} "
+        "(merged, not discarded)")
     return reps, auc, groups
 
 
@@ -356,9 +384,9 @@ def main():
                "auc": {k: float(v) for k, v in auc.items()},
                "corr_groups": groups},
               open(f"{OUT}/fields.json", "w"), indent=1)
-    log(f"\n候选特征 {len(feats)} 个 -> {OUT}/panel.parquet")
+    log(f"\n{len(feats)} candidate features -> {OUT}/panel.parquet")
     top = sorted(feats, key=lambda c: -auc.get(c, 0.5))[:12]
-    log("单变量 AUC 最高的 12 个:")
+    log("highest univariate AUC, top 12:")
     for c in top:
         log(f"  {auc[c]:.3f}  {c}")
 

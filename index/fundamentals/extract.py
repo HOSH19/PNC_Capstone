@@ -195,7 +195,7 @@ def quarter_frame(zip_path, quarter):
         df = pd.concat(parts, axis=1)
         dup = df.columns.duplicated()
         if dup.any():
-            print(f"    WARN {quarter}: {dup.sum()} 个重复列名", flush=True)
+            print(f"    WARN {quarter}: {dup.sum()} duplicate column names", flush=True)
             df = df.loc[:, ~dup]
         df["quarter"] = quarter
         return df.rename_axis("IDRSSD").reset_index()
@@ -227,7 +227,7 @@ def main():
             ok += 1
             ta = df["RC_2170"] if "RC_2170" in df else pd.Series(dtype=float)
             print(f"  [{i}/{len(quarters)}] {q}: {len(df):,} banks x {df.shape[1]-2} fields"
-                  f"  总资产缺失 {int(ta.isna().sum())}", flush=True)
+                  f"  total assets missing {int(ta.isna().sum())}", flush=True)
         except Exception as e:
             print(f"  [{i}/{len(quarters)}] {q}: ERROR {type(e).__name__}: {e}", flush=True)
     print(f"\ndone: {ok}/{len(quarters)} quarters -> {OUT}", flush=True)
