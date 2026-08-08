@@ -224,12 +224,17 @@ def main():
             preds[f"gp{dim}"] = (p, sub)
             lvs.append({"year": Y, "dim": dim, "lv_median": float(np.median(lv)),
                         "gp_train_rows": used})
+        fixed_lv = {}
         for dim in FIXED_DIMS:
             sub = fixed[:dim]
             med = tr[sub].median()
             p, lv, used = fit_gp(tr[sub].fillna(med).values, ytr,
                                  te[sub].fillna(med).values, dim)
             preds[f"gp{dim}@fixed"] = (p, sub)
+            # Per-row, not just the median. The published confidence interval is
+            # built from this, so the historical backfill has no intervals at all
+            # without it — 18 of the 22 quarters the dashboard shows.
+            fixed_lv[f"gp{dim}@fixed_latent_var"] = lv
             lvs.append({"year": Y, "dim": dim, "fixed": True,
                         "lv_median": float(np.median(lv)),
                         "gp_train_rows": used})
@@ -245,6 +250,8 @@ def main():
         base = te[keys].reset_index(drop=True)
         for name, (p, _) in preds.items():
             base[name] = p
+        for k, v in fixed_lv.items():
+            base[k] = v
         base["y"], base["fold"] = yte, Y
         oos.append(base)
 
