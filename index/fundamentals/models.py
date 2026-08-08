@@ -63,7 +63,18 @@ GP_DIMS = [3, 5, 8, 12, 22, 50]
 # ranking, used it, and discarded it; nothing wrote fixed_order.json and no @fixed
 # variant existed here, so the report's headline model could not be rebuilt from
 # this repo and final_model.py could not run at all. The ranking is persisted now.
-FIXED_DIMS = [int(x) for x in os.environ.get("FIXED_DIMS", "50").split(",")]
+
+
+def _dims(raw):
+    """Parse FIXED_DIMS. A bad value should name itself, not surface as a
+    ValueError traceback from module import."""
+    try:
+        return [int(x) for x in raw.split(",") if x.strip()] or [50]
+    except ValueError:
+        raise SystemExit(f"FIXED_DIMS must be comma-separated integers, got {raw!r}")
+
+
+FIXED_DIMS = _dims(os.environ.get("FIXED_DIMS", "50"))
 # The failure label had 1,919 positives and kept every one. This label has
 # ~17.5k, far past what an O(n^3) GP can fit, so both sides are sampled and the
 # ratio is held at 1:1.5 rather than left at the panel's 1:10.
@@ -119,17 +130,28 @@ def gains(model, feats):
     return pd.Series({f: g.get(f"f{i}", 0.0) for i, f in enumerate(feats)})
 
 
+def sample_index(y, seed=0):
+    """Which rows the GP trains on: N_POS positives then N_NEG negatives.
+
+    Its own function because freeze.py has to reproduce this draw exactly to
+    write train_sample.parquet. Duplicating the RNG calls there would work until
+    someone changed one copy — the frozen rows would then quietly stop being the
+    rows fit_gp draws, and nothing would raise.
+    """
+    rng = np.random.RandomState(seed)
+    pos_all = np.where(y == 1)[0]
+    pos = (rng.choice(pos_all, N_POS, replace=False)
+           if len(pos_all) > N_POS else pos_all)
+    neg = rng.choice(np.where(y == 0)[0], min(N_NEG, int((y == 0).sum())),
+                     replace=False)
+    return np.concatenate([pos, neg])
+
+
 def fit_gp(Xtr, ytr, Xte, dim, seed=0):
     """All positives plus a negative sample. length_scale is fixed rather than
     optimised — letting the optimiser run free sent it to ~1e4 and the kernel
     degenerated; sqrt(dim)*1.5 lands in the band that worked empirically."""
-    rng = np.random.RandomState(seed)
-    pos_all = np.where(ytr == 1)[0]
-    pos = (rng.choice(pos_all, N_POS, replace=False)
-           if len(pos_all) > N_POS else pos_all)
-    neg = rng.choice(np.where(ytr == 0)[0], min(N_NEG, int((ytr == 0).sum())),
-                     replace=False)
-    idx = np.concatenate([pos, neg])
+    idx = sample_index(ytr, seed)
     sc = StandardScaler().fit(Xtr[idx])
     gp = GPC(kernel=C(10.0) * Matern(np.ones(dim) * np.sqrt(dim) * 1.5, nu=1.5),
              optimizer=None, random_state=seed).fit(sc.transform(Xtr[idx]), ytr[idx])

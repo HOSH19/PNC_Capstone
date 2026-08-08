@@ -16,6 +16,13 @@ Codes are `{schedule}_{MDRM item}`. The FFIEC label column is the field name exa
 filed, taken from row 2 of each schedule file in the CDR archive — the abbreviations are
 theirs. The expanded reading is ours.
 
+Labels are the **most recent** wording. FFIEC relabels items when the accounting
+changes, and 83 of the 1,818 in `mdrm_names.json` have moved since 2017: ALLL became
+ACL under CECL, troubled debt restructurings became loan modifications under
+ASU 2022-02, capitalised leases became right-of-use assets under ASC 842. Six of the
+50 below are affected. The MDRM item is the same series throughout — only its name
+changed.
+
 ---
 
 ## By schedule
@@ -37,8 +44,8 @@ theirs. The expanded reading is ours.
 | RI-B I | Charge-offs and recoveries | 1 |
 | — | Derived | 1 |
 
-Credit quality dominates: RC-N, plus the nonaccrual and restructured lines inside RC-R II
-and RC-C I, account for 14 of the 50. Deposit structure — RC-E and RC-O together —
+Credit quality dominates: RC-N, plus the nonaccrual and loan-modification lines inside
+RC-R II and RC-C I, account for 14 of the 50. Deposit structure — RC-E and RC-O together —
 accounts for 9, which is what the label's deposit leg would predict.
 
 ---
@@ -59,7 +66,7 @@ accounts for 9, which is what the label's deposit leg would predict.
 | 10 | `RCRII_H300` | EF FUND CONTRBTNS CNTRL CNTRPRTIES | Default fund contributions to central counterparties |
 | 11 | `RCRII_S449` | TOTAL LOANS AND R ON NONACCRUAL | Total loans and receivables on nonaccrual status |
 | 12 | `RCO_G468` | UNSECURED OTHR BRW MAT GT 5 YR | Unsecured other borrowings with remaining maturity over 5 years |
-| 13 | `RCN_F663` | RSTRCTD LN SCD 1-4 RES NONACCRUAL | Restructured loans secured by 1–4 family residential properties, on nonaccrual |
+| 13 | `RCN_F663` | LN MOD FIN DFCLTY SCD 1-4 RES NONACC | Loan modifications to borrowers in financial difficulty, secured by 1–4 family residential properties, on nonaccrual |
 | 14 | `RCRII_S431` | TOTAL LOANS AND OTHER EXPOSURES | Total loans and other credit exposures |
 | 15 | `RCN_5459` | ALL OTHER LOANS-PAST DU 30-89 DAYS | All other loans past due 30–89 days |
 | 16 | `RCN_1407` | TOTAL, PAST DUE 90 OR MORE, ACCRUING | Total loans and leases past due 90 days or more and still accruing |
@@ -70,10 +77,10 @@ accounts for 9, which is what the label's deposit leg would predict.
 | 21 | `RC_2200` | TOTAL DEPOSITS | Total deposits |
 | 22 | `RCCI_2107` | OBLGS OF ST&POLITICAL SUBDVS IN U.S. | Obligations of states and political subdivisions in the U.S. |
 | 23 | `RCCI_A568` | CLSD-END LNS SECD 1ST LIENS OVR 15 Y | Closed-end loans secured by first liens on 1–4 family residential properties, maturity over 15 years |
-| 24 | `RCL_F164` | 1-4 FAM RES CNSTRCTN LN COMMITMNTS | Commitments to fund 1–4 family residential construction loans |
+| 24 | `RCL_F164` | 1-4  FAM RES CNSTRCTN LN COMMITMNTS | Commitments to fund 1–4 family residential construction loans |
 | 25 | `RCK_3465` | QUARTERLY AVG OF LNS SECD BY 1-4 FAM | Quarterly average of loans secured by 1–4 family residential properties |
 | 26 | `RCN_B575` | PAST DUE(30-89DA): CREDIT CARD LOANS | Credit card loans past due 30–89 days |
-| 27 | `RCRII_S585` | NOTIONAL PRINCIP ONE YEAR OR LESS | Notional principal of derivative contracts with one year or less remaining maturity |
+| 27 | `RCRII_S585` | NOTIONAL PRINCIPONE YEAR OR LESS | Notional principal of derivative contracts with one year or less remaining maturity |
 | 28 | `RIBI_C894` | OTHR CNSTRCTN LN & LAND DEV RECOVERI | Recoveries on other construction and land development loans |
 | 29 | `RCE_B550` | NONTRANSACTION ACCTS: IPC DEPOSITS | Nontransaction accounts: deposits of individuals, partnerships and corporations |
 | 30 | `RCCI_F158` | LN SECURED BY 1-4 FAM RES CONSTRUCTI | Loans secured by 1–4 family residential construction and land development |
@@ -82,7 +89,7 @@ accounts for 9, which is what the label's deposit leg would predict.
 | 33 | `RCO_F045` | AMT RETIRE DEP ACCNT $250K OR LESS | Amount in retirement deposit accounts of $250,000 or less |
 | 34 | `RCF_K270` | LIFE INS ASSET HYBRID ACCNT | Life insurance assets held in hybrid accounts |
 | 35 | `RCCI_1590` | LOANS TO FINANCE AGRICULTURAL PROD | Loans to finance agricultural production and other loans to farmers |
-| 36 | `RCCI_HK25` | TOTAL LOANS RESTRUCTURED IN TROUBLED | Total loans restructured in troubled debt restructurings |
+| 36 | `RCCI_HK25` | TOTAL LN MOD FIN DFCLTY | Total loan modifications to borrowers experiencing financial difficulty (what troubled debt restructurings became under ASU 2022-02) |
 | 37 | `RCRII_S413` | TOTAL LOANS AND TGAGE EXPOSURES | Total loans and mortgage exposures |
 | 38 | `RCE_HK13` | MATURITY AND REPRICING DATA FOR TIME | Maturity and repricing data for time deposits |
 | 39 | `RCRII_S547` | OVER-THE-COUNTER WEIGHT CATEGORY | Over-the-counter derivatives allocated to a risk-weight category |
@@ -90,13 +97,13 @@ accounts for 9, which is what the label's deposit leg would predict.
 | 41 | `RCRII_D958` | CASH AND BALANCES DUE FROM DEPOSITOR | Cash and balances due from depository institutions |
 | 42 | `RCE_2215` | TOTAL TRANSACTIONS ACCOUNTS | Total transaction accounts |
 | 43 | `RCB_G323` | MBS OTHR OTHR RES MBS AFS FV | Other residential mortgage-backed securities, available-for-sale, at fair value |
-| 44 | `RCN_K114` | LN RSTR SECD NONFARM OWN PD 30 - 89 | Restructured loans secured by owner-occupied nonfarm nonresidential properties, past due 30–89 days |
-| 45 | `RCRII_A222` | EXCESS ALLOWANCE FOR LN&LEASE LOSSES | Excess allowance for loan and lease losses |
+| 44 | `RCN_K114` | LN MOD FIN DFCLTY SECD NONFARM OWN P | Loan modifications to borrowers in financial difficulty, secured by owner-occupied nonfarm nonresidential properties, past due |
+| 45 | `RCRII_A222` | EXCESS AACL | Excess adjusted allowance for credit losses (the ALLL under CECL) |
 | 46 | `RCRII_G607` | COMMERCIAL AND SIMILAR LETTERS OF CR | Commercial and similar letters of credit |
 | 47 | `RCO_F051` | AMT OF DEP ACCNT MORE THAN $250K | Amount in deposit accounts of more than $250,000 |
-| 48 | `RC_2145` | PREMISES&FIXED ASSETS(INCL CAP LSES) | Premises and fixed assets, including capitalised leases |
+| 48 | `RC_2145` | PREMISES&FIXED ASSETS(INCL ROU) | Premises and fixed assets, including right-of-use lease assets |
 | 49 | `RCE_B552` | NONTRANSACT ACCT: CB'S & DI'S IN U.S | Nontransaction accounts: deposits of commercial banks and other depository institutions in the U.S. |
-| 50 | `RCCI_K161` | LN LAND DEV NFARM NRES SCD OWN OCC N | Loans for land development and other nonfarm nonresidential purposes, secured by owner-occupied properties |
+| 50 | `RCCI_K161` | LN MOD FIN DFCLTY LAND DEV NFARM NRE | Loan modifications to borrowers in financial difficulty, secured by land development and other nonfarm nonresidential property |
 
 ---
 

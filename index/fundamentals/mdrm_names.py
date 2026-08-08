@@ -79,8 +79,14 @@ def main():
             got = names_from_zip(r.file_path)
             os.remove(r.file_path)
             new = len(set(got) - set(merged))
-            for k, v in got.items():
-                merged.setdefault(k, v)
+            # Last write wins, and QUARTERS runs oldest to newest, so a field
+            # keeps its most recent label. 83 items have been relabelled since
+            # 2017 -- ALLL became ACL under CECL, "troubled debt restructuring"
+            # became "loan modification" under ASU 2022-02, "capitalized leases"
+            # became "right-of-use" under ASC 842. First-wins would pin all of
+            # them to their 2017 wording. A field dropped from the Call Report
+            # keeps the last label it was filed under, which is what it should.
+            merged.update(got)
             log(f"  [{i}/{len(QUARTERS)}] {q}: {len(got):,} fields, {new:,} new")
         except Exception as e:
             log(f"  [{i}/{len(QUARTERS)}] {q}: ERROR {type(e).__name__}: {e}")

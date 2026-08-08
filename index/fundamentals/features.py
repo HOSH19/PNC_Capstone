@@ -239,14 +239,27 @@ def degenerate(stable, d):
     comes out 534 instead of 529, with no warning anywhere in the log. Build it
     with mdrm_names.py; the output is committed alongside this file.
 
-    BAD matches as a substring and has no word boundary, so two real quantities
-    are caught by accident: RC_2130 INVEST. IN UNCONSOLI(DATE)D SUBS & CO. and
-    RCO_M963 NON-AGENCY RES(IDENT)IAL MBS. Left as-is deliberately. Both are
-    noise on this label — univariate AUC 0.510 and screened out anyway
-    respectively, against 0.648 for the strongest field — and the pool of 529 in
-    REPORT §3 is defined by this behaviour, so tightening the match would move
-    the documented funnel and break reproduction of the delivered scores for no
-    measurable gain. Revisit when the feature set is next rebuilt.
+    Nine fields match, and only two of them are identifiers: RI_9106 ACQUISITION
+    DATE and RCO_A545 PB/PSA FDIC CERTIFICATE NUMBER. The other seven are false
+    positives of two kinds:
+
+      substring, no word boundary
+        RC_2130   INVEST. IN UNCONSOLI(DATE)D SUBS & CO.
+        RCO_M963  NON-AGENCY RES(IDENT)IAL MBS
+
+      genuine counts, caught by "NBR " — the carve-out for "NBR OF FT" (full-time
+      employees) shows the keyword was always known to over-reach
+        RCM_6165  NBR OF EXEC OFFCRS EPRIN SHAREHOLDERS
+        RCO_F046  NBR RETIRE DEP ACCNT $250K OR LESS
+        RCO_F048  NBR RETIRE DEP ACCNT MOR THAN $250K
+        RCO_F050  NBR OF DEP ACCNTS OF $250K OR LESS
+        RCO_F052  NBR OF DEP ACCNT GT $250K
+
+    All seven are left in deliberately. Univariate AUC runs 0.510 to 0.543 against
+    0.648 for the strongest field, so none of them carries signal worth
+    recovering, and the pool of 529 in REPORT §3 is defined by this behaviour —
+    tightening the match would move the documented funnel for no measurable gain.
+    Revisit when the feature set is next rebuilt.
     """
     import json as _json
     if not os.path.exists(MDRM_NAMES):
