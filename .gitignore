@@ -14,3 +14,6 @@ docs/design-decisions*.md
 # labeling round-trip data (never commit)
 labeling_batch_*.csv
 labels_*.csv
+
+# FinBERT training-set exports (never commit)
+finbert_*.csv

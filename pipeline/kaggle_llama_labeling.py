@@ -36,12 +36,19 @@ import json
 from vllm import LLM, SamplingParams
 
 from pipeline.eligibility import text_for
-from pipeline.labeling import LABELS, build_model_meta, render_prompt, validate_label
+from pipeline.labeling import (
+    LABELS,
+    build_model_meta,
+    parse_prompt_version,
+    render_prompt,
+    validate_label,
+)
 
 # calibration: confirm this AWQ checkpoint is reachable on Kaggle.
 MODEL = "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"
 QUANTIZATION = "awq"
-PROMPT_VERSION = "v2"
+# The prompt version is NOT a constant here — it is read from the prompt file
+# passed to --prompt, so pointing this at a v3 file cannot record 'v2'.
 
 
 def load_template(path: str) -> str:
@@ -63,6 +70,9 @@ def main() -> None:
     args = ap.parse_args()
 
     template = load_template(args.prompt)
+    # Fail before the GPU work, not after it: a missing marker discovered at
+    # write time would throw away the whole run.
+    prompt_version = parse_prompt_version(template)
     rows = read_rows(args.input)
     prompts = [render_prompt(text_for(r), template) for r in rows]
 
@@ -73,7 +83,7 @@ def main() -> None:
     outputs = llm.chat([[{"role": "user", "content": p}] for p in prompts], params)
 
     meta = json.dumps(
-        build_model_meta(MODEL, QUANTIZATION, PROMPT_VERSION, args.run_date)
+        build_model_meta(MODEL, QUANTIZATION, prompt_version, args.run_date)
     )
     with open(args.output, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["raw_item_id", "label", "model_meta"])

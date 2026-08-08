@@ -45,7 +45,8 @@ training away.
 
 ### 1. Label `gold_slice_1` — 50 rows
 
-0 of 50 filled. This is my share of the 5 × 50 human verification set.
+Done (commit `ed21875`). This was my share of the 5 × 50 human verification
+set. The gate itself is computed too — see `evals/gate_report_2026-08-07.md`.
 
 ### 2. Compute the quality gate
 
