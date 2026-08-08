@@ -26,7 +26,7 @@ def test_hygiene_filters_and_funnel():
         _batch("3", title="Ibex Wealth Advisors Grows Stake in Micron Technology"),
         _batch("4", title="Commerce Bancshares Downgraded by Wall Street Zen"),
     ]
-    train, val, funnel = build_training_set(labels, batch, {}, holdout_days=0)
+    train, val, _hold, funnel = build_training_set(labels, batch, {}, holdout_days=0)
     ids = {r["raw_item_id"] for r in train + val}
     assert ids == {"1", "4"}  # contentless edgar + spam dropped, rating row kept
     assert funnel["skipped"] == {"contentless_edgar": 1, "holdings_spam": 1}
@@ -35,7 +35,7 @@ def test_hygiene_filters_and_funnel():
 def test_dup_title_folded_case_insensitive():
     labels = [_label("1"), _label("2")]
     batch = [_batch("1", title="Same Story"), _batch("2", title="same story")]
-    train, val, funnel = build_training_set(labels, batch, {}, holdout_days=0)
+    train, val, _hold, funnel = build_training_set(labels, batch, {}, holdout_days=0)
     assert len(train) + len(val) == 1
     assert funnel["skipped"]["dup_title"] == 1
 
@@ -43,7 +43,7 @@ def test_dup_title_folded_case_insensitive():
 def test_human_override_wins_and_is_counted():
     labels = [_label("1", "neutral"), _label("2", "neutral")]
     batch = [_batch("1"), _batch("2", title="Other news")]
-    train, val, funnel = build_training_set(
+    train, val, _hold, funnel = build_training_set(
         labels, batch, {"1": "negative", "2": "neutral"}, holdout_days=0
     )
     by_id = {r["raw_item_id"]: r["label"] for r in train + val}
@@ -58,7 +58,7 @@ def test_time_split_last_weeks_go_to_val():
         _batch("2", title="Mid", published="2026-06-01"),
         _batch("3", title="New", published="2026-07-01"),
     ]
-    train, val, _ = build_training_set(labels, batch, {}, holdout_days=20)
+    train, val, _hold, _f = build_training_set(labels, batch, {}, holdout_days=20)
     assert {r["raw_item_id"] for r in train} == {"1", "2"}
     assert {r["raw_item_id"] for r in val} == {"3"}
 
@@ -66,13 +66,47 @@ def test_time_split_last_weeks_go_to_val():
 def test_edgar_text_includes_excerpt():
     labels = [_label("1")]
     batch = [_batch("1", source="edgar", title="Bank 8-K", excerpt="Material event.")]
-    train, val, _ = build_training_set(labels, batch, {}, holdout_days=0)
+    train, val, _hold, _f = build_training_set(labels, batch, {}, holdout_days=0)
     assert (train + val)[0]["text"] == "Bank 8-K\nMaterial event."
 
 
 def test_missing_batch_row_raises():
     with pytest.raises(ValueError, match="no batch row"):
         build_training_set([_label("9")], [], {}, holdout_days=0)
+
+
+def test_holdout_rows_leave_train_and_val_but_are_returned():
+    """A holdout row kept in val would still be a row the model trained
+    against once val is used for model selection — and val's other labels
+    are Llama's, so it is the only human-truth evaluation there is."""
+    labels = [_label("1"), _label("2"), _label("3")]
+    batch = [_batch("1"), _batch("2", title="Second"), _batch("3", title="Third")]
+    train, val, hold, funnel = build_training_set(
+        labels, batch, {"2": "negative"}, holdout_days=0, holdout_ids=frozenset({"2"})
+    )
+    assert "2" not in {r["raw_item_id"] for r in train + val}
+    assert [r["raw_item_id"] for r in hold] == ["2"]
+    assert hold[0]["label"] == "negative"  # human label, not Llama's
+    assert funnel["skipped"]["holdout"] == 1
+    assert funnel["holdout"]["n"] == 1
+
+
+def test_holdout_defaults_to_empty():
+    labels = [_label("1")]
+    train, val, hold, funnel = build_training_set(
+        labels, [_batch("1")], {}, holdout_days=0
+    )
+    assert hold == []
+    assert len(train + val) == 1
+
+
+def test_stratum_split_is_stable_and_halves_slice_6():
+    from pipeline.quality_gate import stratum_for
+
+    assert stratum_for("gold_slice_1", 0) == "dev"
+    assert stratum_for("gold_slice_2", 0) == "holdout"
+    assert stratum_for("gold_slice_6", 24) == "dev"
+    assert stratum_for("gold_slice_6", 25) == "holdout"
 
 
 def test_holdings_spam_patterns():

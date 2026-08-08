@@ -119,6 +119,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", required=True, help="finbert_<date>_train.csv")
     ap.add_argument("--val", required=True, help="finbert_<date>_val.csv")
+    ap.add_argument(
+        "--holdout",
+        help="finbert_<date>_holdout.csv — human-labeled rows kept out of "
+        "training. Report this separately from --val: val's labels are the "
+        "labeler's, so val measures agreement with Llama, not accuracy.",
+    )
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--run-date", required=True, help="YYYY-MM-DD")
     # calibration: 3 epochs / 2e-5 are the standard BERT fine-tune defaults;
@@ -159,9 +165,16 @@ def main() -> None:
         train_dataset=train_ds,
     )
 
+    hold_ds = None
+    if args.holdout:
+        hold_texts, hold_labels = read_split(args.holdout)
+        hold_ds = SplitDataset(hold_texts, hold_labels, tokenizer, label2id)
+
     baseline = evaluate(trainer, val_ds, id2label)  # before any training
+    baseline_holdout = evaluate(trainer, hold_ds, id2label) if hold_ds else None
     trainer.train()
     fine_tuned = evaluate(trainer, val_ds, id2label)
+    fine_tuned_holdout = evaluate(trainer, hold_ds, id2label) if hold_ds else None
 
     model_version = f"finbert-ft-{args.run_date}"
     metrics = {
@@ -172,18 +185,35 @@ def main() -> None:
         "class_weights": class_weights.tolist(),
         "baseline_pretrained": baseline,
         "fine_tuned": fine_tuned,
+        "holdout_size": len(hold_ds) if hold_ds else 0,
+        "baseline_pretrained_holdout": baseline_holdout,
+        "fine_tuned_holdout": fine_tuned_holdout,
     }
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     with open(os.path.join(args.output_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
 
-    print(f"\n{model_version}  (val n={len(val_ds)})")
-    print(f"{'':10} {'baseline':>10} {'fine-tuned':>10}")
-    acc_b, acc_f = baseline["accuracy"], fine_tuned["accuracy"]
-    print(f"{'accuracy':10} {acc_b:>10.3f} {acc_f:>10.3f}")
-    for lb in LABELS:
-        print(f"f1 {lb:7} {baseline[lb]['f1']:>10.3f} {fine_tuned[lb]['f1']:>10.3f}")
+    def report(title: str, before: dict, after: dict, n: int) -> None:
+        print(f"\n{title}  (n={n})")
+        print(f"{'':10} {'baseline':>10} {'fine-tuned':>10}")
+        print(f"{'accuracy':10} {before['accuracy']:>10.3f} {after['accuracy']:>10.3f}")
+        for lb in LABELS:
+            print(f"f1 {lb:7} {before[lb]['f1']:>10.3f} {after[lb]['f1']:>10.3f}")
+
+    print(f"\n{model_version}")
+    report(
+        "val — labels are the LABELER's, not truth", baseline, fine_tuned, len(val_ds)
+    )
+    if hold_ds:
+        report(
+            "holdout — human labels, never trained on",
+            baseline_holdout,
+            fine_tuned_holdout,
+            len(hold_ds),
+        )
+    else:
+        print("\nno --holdout given: nothing here measures human-truth accuracy")
     print(f"\nweights + metrics.json -> {args.output_dir}")
 
 

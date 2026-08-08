@@ -56,17 +56,25 @@ def build_training_set(
     batch_rows: list[dict],
     gold_by_id: dict[str, str],
     holdout_days: int,
-) -> tuple[list[dict], list[dict], dict]:
+    holdout_ids: frozenset[str] = frozenset(),
+) -> tuple[list[dict], list[dict], list[dict], dict]:
     """Hygiene filters + human override + time split. Pure, no I/O.
 
-    Returns (train, val, funnel); each output row is
+    Returns (train, val, holdout, funnel); each output row is
     {raw_item_id, published_at, text, label}.
+
+    holdout_ids are human-labeled rows pulled out of BOTH train and val (see
+    quality_gate.stratum_for). Without this the gold rows scatter across the
+    split by publication date and the only human-truth rows left to evaluate
+    on are ones the model trained against; val's labels are otherwise Llama's,
+    so scoring against it measures agreement with the labeler, not accuracy.
     """
     by_id = {r["raw_item_id"]: r for r in batch_rows}
     funnel: dict = {"total": len(labels_rows)}
     skipped: Counter = Counter()
     seen_titles: set[str] = set()
     kept: list[dict] = []
+    holdout: list[dict] = []
     overrides = 0
 
     for lab in labels_rows:
@@ -88,14 +96,19 @@ def build_training_set(
         label = gold_by_id.get(lab["raw_item_id"])
         if label is not None and label != lab["label"]:
             overrides += 1
-        kept.append(
-            {
-                "raw_item_id": lab["raw_item_id"],
-                "published_at": item["published_at"],
-                "text": text_for(item),
-                "label": label if label is not None else lab["label"],
-            }
-        )
+        row = {
+            "raw_item_id": lab["raw_item_id"],
+            "published_at": item["published_at"],
+            "text": text_for(item),
+            "label": label if label is not None else lab["label"],
+        }
+        # Holdout rows are evaluation-only: out of train AND val, both here
+        # and — unlike the dedup/hygiene skips — kept as their own file.
+        if lab["raw_item_id"] in holdout_ids:
+            skipped["holdout"] += 1
+            holdout.append(row)
+            continue
+        kept.append(row)
 
     cutoff = max(datetime.fromisoformat(r["published_at"]) for r in kept) - timedelta(
         days=holdout_days
@@ -106,9 +119,9 @@ def build_training_set(
     funnel["skipped"] = dict(skipped)
     funnel["human_overrides"] = overrides
     funnel["cutoff"] = cutoff.isoformat()
-    funnel["train"] = {"n": len(train), **Counter(r["label"] for r in train)}
-    funnel["val"] = {"n": len(val), **Counter(r["label"] for r in val)}
-    return train, val, funnel
+    for name, rows in (("train", train), ("val", val), ("holdout", holdout)):
+        funnel[name] = {"n": len(rows), **Counter(r["label"] for r in rows)}
+    return train, val, holdout, funnel
 
 
 def read_rows(path: str) -> list[dict]:
@@ -131,8 +144,8 @@ def print_funnel(funnel: dict) -> None:
         print(f"    skipped[{reason}]  {n}", file=sys.stderr)
     print(f"  human overrides    {funnel['human_overrides']}", file=sys.stderr)
     print(f"  time cutoff        {funnel['cutoff']}", file=sys.stderr)
-    for split in ("train", "val"):
-        print(f"  {split:5}              {funnel[split]}", file=sys.stderr)
+    for split in ("train", "val", "holdout"):
+        print(f"  {split:7}            {funnel[split]}", file=sys.stderr)
 
 
 def main() -> None:
@@ -141,19 +154,34 @@ def main() -> None:
     ap.add_argument("--batch", required=True, help="labeling_batch_<date>.csv")
     ap.add_argument("--gold-dir", default="evals/items")
     ap.add_argument("--holdout-days", type=int, default=3)
+    ap.add_argument(
+        "--no-holdout",
+        action="store_true",
+        help="keep the human holdout rows in train/val (loses the clean eval set)",
+    )
     ap.add_argument("--output-prefix", required=True, help="e.g. finbert_<date>")
     args = ap.parse_args()
 
-    gold_by_id = {r["id"]: r["label"] for r in load_gold_rows(args.gold_dir)}
-    train, val, funnel = build_training_set(
-        read_rows(args.labels), read_rows(args.batch), gold_by_id, args.holdout_days
+    gold = load_gold_rows(args.gold_dir)
+    gold_by_id = {r["id"]: r["label"] for r in gold}
+    holdout_ids = frozenset(
+        r["id"] for r in gold if r["stratum"] == "holdout" and not args.no_holdout
+    )
+    train, val, holdout, funnel = build_training_set(
+        read_rows(args.labels),
+        read_rows(args.batch),
+        gold_by_id,
+        args.holdout_days,
+        holdout_ids,
     )
     print_funnel(funnel)
     write_csv(f"{args.output_prefix}_train.csv", train)
     write_csv(f"{args.output_prefix}_val.csv", val)
+    if holdout:
+        write_csv(f"{args.output_prefix}_holdout.csv", holdout)
     print(
-        f"wrote {len(train)} train / {len(val)} val rows to "
-        f"{args.output_prefix}_{{train,val}}.csv",
+        f"wrote {len(train)} train / {len(val)} val / {len(holdout)} holdout rows "
+        f"to {args.output_prefix}_{{train,val,holdout}}.csv",
         file=sys.stderr,
     )
 

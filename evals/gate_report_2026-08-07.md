@@ -89,6 +89,17 @@ This is the finding that gates Stage 2, not the headline number. Directional lab
 | negative | 2 | 13 | 21 |
 | neutral | 6 | 1 | 214 |
 
+## Dev vs holdout
+
+`dev` is what a prompt may be tuned against; `holdout` is read once, at the end, and is the only human-truth evaluation the FinBERT training set is kept away from. A run that improves on dev while holdout drops is overfitted to the rows the prompt was written against.
+
+| stratum | n | agreement | kappa | macro F1 |
+|---|---|---|---|---|
+| dev | 125 | 100/125 = 80.0% | 0.511 | 0.673 |
+| holdout | 175 | 153/175 = 87.4% | 0.609 | 0.723 |
+
+⚠️ The holdout is **not fully blind**: this report lists every disagreeing row, holdout rows included, so anyone who read an earlier revision has seen them. Prompt revisions must be written from the dev rows and `labeling_guide.md` only, and the final write-up should call this holdout semi-blind rather than blind.
+
 ## By slice
 
 | slice | agreement |

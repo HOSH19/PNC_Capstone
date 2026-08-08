@@ -54,6 +54,28 @@ CRITERIA = (
 # headline number and reported as their own stratum.
 STRATIFIED_SLICES = frozenset({"gold_slice_6"})
 
+# The dev / holdout split of the human rows, fixed 2026-08-07 before any
+# prompt revision. `dev` is what a prompt may be tuned against; `holdout` is
+# read once, at the end, and is excluded from the FinBERT training set so
+# there is a human-truth evaluation the model never trained on.
+#
+# Slice 6 is halved rather than assigned whole: it is the directional
+# oversample, and giving it entirely to dev left the holdout with 3 negative
+# rows. The cut is by file order, so it cannot be re-drawn in a favourable
+# direction later, and the file is already shuffled (negative 4 vs 3, positive
+# 10 vs 10 across the halves).
+HOLDOUT_SLICES = frozenset({"gold_slice_2", "gold_slice_4", "gold_slice_5"})
+HALVED_SLICE = "gold_slice_6"
+HALVED_AT = 25
+
+
+def stratum_for(slice_name: str, index: int) -> str:
+    """Which side of the dev/holdout split one gold row falls on."""
+    if slice_name == HALVED_SLICE:
+        return "holdout" if index >= HALVED_AT else "dev"
+    return "holdout" if slice_name in HOLDOUT_SLICES else "dev"
+
+
 # ponytail: title heuristic from labeling_guide.md's trap tables — flagged
 # rows are listed in the report for eyeball review; the flag is not a verdict.
 TONE_DIRECTION_PATTERNS = tuple(
@@ -161,6 +183,13 @@ def compute_gate(gold_rows: list[dict], llama_by_id: dict[str, str]) -> dict:
         "by_source": {
             s: tally([r for r in joined if r["source"] == s])
             for s in sorted({r["source"] for r in joined})
+        },
+        "by_stratum": {
+            s: {
+                **tally([r for r in joined if r.get("stratum") == s]),
+                **chance_corrected([r for r in joined if r.get("stratum") == s]),
+            }
+            for s in ("dev", "holdout")
         },
         "tone_direction": {**tally(flagged), "rows": flagged},
         "disagreements": [r for r in joined if not r["agree"]],
@@ -345,7 +374,35 @@ def render_report(gate: dict, run_date: str, labels_path: str) -> str:
     for m in LABELS:
         cells = " | ".join(str(gate["confusion"].get((m, h), 0)) for h in LABELS)
         lines.append(f"| {m} | {cells} |")
-    lines += ["", "## By slice", "", "| slice | agreement |", "|---|---|"]
+    lines += [
+        "",
+        "## Dev vs holdout",
+        "",
+        "`dev` is what a prompt may be tuned against; `holdout` is read once, at "
+        "the end, and is the only human-truth evaluation the FinBERT training "
+        "set is kept away from. A run that improves on dev while holdout drops "
+        "is overfitted to the rows the prompt was written against.",
+        "",
+        "| stratum | n | agreement | kappa | macro F1 |",
+        "|---|---|---|---|---|",
+        *(
+            f"| {s} | {t['n']} | {_pct(t['agree'], t['n'])} | {t['kappa']:.3f} "
+            f"| {t['macro_f1']:.3f} |"
+            for s, t in gate["by_stratum"].items()
+            if t["n"]
+        ),
+        "",
+        "⚠️ The holdout is **not fully blind**: this report lists every "
+        "disagreeing row, holdout rows included, so anyone who read an earlier "
+        "revision has seen them. Prompt revisions must be written from the dev "
+        "rows and `labeling_guide.md` only, and the final write-up should call "
+        "this holdout semi-blind rather than blind.",
+        "",
+        "## By slice",
+        "",
+        "| slice | agreement |",
+        "|---|---|",
+    ]
     for s, t in gate["by_slice"].items():
         note = " (stratified — see headline note)" if s in STRATIFIED_SLICES else ""
         lines.append(f"| {s} | {_pct(t['agree'], t['n'])}{note} |")
@@ -376,7 +433,7 @@ def load_gold_rows(gold_dir: str) -> list[dict]:
     for path in sorted(glob.glob(os.path.join(gold_dir, "gold_slice_*.csv"))):
         slice_name = os.path.splitext(os.path.basename(path))[0]
         with open(path, encoding="utf-8") as f:
-            for r in csv.DictReader(f):
+            for i, r in enumerate(csv.DictReader(f)):
                 rows.append(
                     {
                         "id": r["id"],
@@ -384,6 +441,7 @@ def load_gold_rows(gold_dir: str) -> list[dict]:
                         "title": r["title"],
                         "label": validate_label(r["label"]),
                         "slice": slice_name,
+                        "stratum": stratum_for(slice_name, i),
                     }
                 )
     return rows
