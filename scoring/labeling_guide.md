@@ -70,6 +70,24 @@ Cases where **the bank is in the headline but isn't the subject** (rule 1):
 | "Bank stocks underperform: HDFC, Axis, Yes Bank decline" | **negative** | named banks *are* the subject; non-US still counts |
 | "Morgan Stanley sets a new 52-week high" / "Commerce Bancshares downgraded to Sell" | **positive** / **negative** | the bank's *own* share price or rating |
 
+### EDGAR 8-K filings — the one place we disagreed with each other
+
+Rows whose `source` is `edgar` are SEC filings, and the 2026-08-07 gate review
+found them to be the least consistent group **on the human side**, in both
+directions: some `"Fifth Third Bancorp 8-K"`-style rows were called `positive`
+and near-identical ones `neutral`. The rule, so the next pass is consistent:
+
+- A **routine** 8-K — scheduled earnings release, dividend declaration,
+  officer appointment, annual-meeting result — with no stated worsening or
+  improvement in the bank's condition → **neutral**. An earnings release is
+  not `positive` merely for existing.
+- Only go directional when the excerpt itself says the condition changed:
+  results materially beating or missing, a charge or loss provision, a
+  regulatory agreement, an executive departing under pressure.
+- Excerpts that are entirely the SEC cover page — address, phone number, the
+  Rule 425 / 14a-12 checkboxes, the registered-securities table — contain no
+  event at all → **neutral**. There is nothing to read.
+
 ## How to fill it in
 
 1. Open the CSV / sheet you were given. Columns:

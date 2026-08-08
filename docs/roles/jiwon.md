@@ -48,7 +48,28 @@ training away.
 Done (commit `ed21875`). This was my share of the 5 × 50 human verification
 set. The gate itself is computed too — see `evals/gate_report_2026-08-07.md`.
 
-### 2. Compute the quality gate
+### 2. Compute the quality gate ✔ done 2026-08-07
+
+`pipeline/quality_gate.py` → `evals/gate_report_2026-08-07.md`, over all 300
+rows (slices 1–6). What it found, and what changed as a result:
+
+- The **≥85% threshold is retired**: 91.6% of human labels in the random
+  sample are `neutral`, so a do-nothing labeler beats it. Read the gate as
+  kappa (0.473 random / 0.564 pooled) and macro-F1 instead.
+- **`negative` precision 13/36 = 36.1%** is the finding that matters — it held
+  at 37.5% on 16 rows and 36.1% on 36, so it is structural. The hygiene
+  filters remove **0** of those 21 mislabels; 11 are bank-as-analyst rating
+  rows. It is a prompt defect, and it sits on the 186 `negative` training rows.
+- Acceptance criteria for the next run are fixed in `quality_gate.CRITERIA`,
+  paired precision-with-recall so the fix cannot be gamed.
+- Gold rows are now split dev (1, 3, first half of 6) / holdout (2, 4, 5,
+  second half of 6). Tune prompts on dev only.
+
+Next: run prompt v3 (`evals/prompts/jiwon_llama_v3.md`) over
+`labeling_batch_gold300.csv` on Kaggle, re-score, and only relabel all 8,360
+rows if the criteria clear.
+
+<details><summary>Original task description</summary>
 
 Once slices 4 (Rita) and 5 (Yusheng) land on `main`, all 250 rows exist.
 
@@ -63,24 +84,34 @@ Once slices 4 (Rita) and 5 (Yusheng) land on `main`, all 250 rows exist.
   pass rate can hide failure on precisely those rows.
 - ⚠️ **Mind the class imbalance.** Across all 250 rows: 229 neutral, 14
   positive, 7 negative. Per-class agreement for `negative` rests on **seven
-  rows** — do not decide the gate on that number alone. This is why Yusheng's
-  slices 6–9 exist.
+  rows** — do not decide the gate on that number alone. Slice 6 was built to
+  fix exactly this, and did: `negative` went 7 → 14 human rows and 16 → 36
+  llama rows, which is what turned the 36% precision reading from a suspicion
+  into a measurement.
 
 If the gate fails: revise the prompt, re-label, and only then consider standing
 up the Gemini challenger.
 
-### 3. Training-set hygiene
+</details>
 
-Filters applied when **assembling the training set** — no `eligibility` change,
-no re-export, no re-labeling:
+### 3. Training-set hygiene — filters ✔, `eligibility` predicates still open
+
+Implemented in `pipeline/export_training_set.py`; counts re-measured
+2026-08-07 against the 2026-07-22 batch:
 
 | Class | Rows | Directional | Action |
 |---|---|---|---|
 | Contentless EDGAR (10-Q / 10-K/A, no excerpt) | 107 | 0 | exclude — degenerate, all `neutral` |
-| Holdings / 13F wire spam | 723 | 51 | exclude — the direction belongs to another company |
-| Rating / price-target templates | 375 | 123 | **keep for now** — same surface form covers both roles |
+| Holdings / 13F wire spam | **983** | 43 | exclude — the direction belongs to another company |
+| Rating / price-target templates | 571 | 157 | **keep for now** — same surface form covers both roles |
+| Duplicate titles | 385 | — | exclude — leakage |
+| Human holdout stratum | 132 | 20 | exclude from train/val, written as its own CSV |
 
-Also finish the two `eligibility` predicates, since they gate both this and
+The spam predicate is now structural (two-entity templates only), which is why
+it reads 983 rather than the earlier 723 estimate; overlap with the rating
+class measured zero.
+
+Still to do — the two `eligibility` predicates, since they gate both this and
 serving:
 
 - `is_syndication_noise` — must fire only when a **second entity** is the
@@ -103,17 +134,26 @@ serving:
 ships**. Filtering only at training time while serving keeps scoring those rows
 creates exactly the train/serve skew the shared filter exists to prevent.
 
-### 4. Fine-tune FinBERT
+### 4. Fine-tune FinBERT — scripts ✔, run still blocked on the relabel
 
-Kaggle GPU, same environment as the labeling batch.
+`pipeline/kaggle_finbert_train.py` is written: pretrained-baseline comparison,
+inverse-frequency class weights, val and human-holdout reported separately.
+`export_training_set.py` produces train 5,280 / val 1,473 / holdout 132.
+
+**Do not run it on the v2 labels.** Not because of the rule that Stage 2 waits
+on the gate, but because the run could not be interpreted: validation labels
+come from the same labeler, so a strong `negative` F1 would mean the model
+reproduced a 36%-precision error faithfully, and a weak one confounds label
+noise with class scarcity and FinBERT's tone prior. Relabel first.
 
 - Training set: champion labeler's `item_label` rows, with `human` rows
   overriding where both exist
-- **Time-based** train/validation split, not random — matches serving reality
-  and stops syndicated near-duplicates leaking across the split
-- Report accuracy + per-class F1 on the holdout, **against a pretrained-only
-  FinBERT baseline**. Without that comparison there is no evidence fine-tuning
-  did anything
+- **Time-based** split in days (default 3), not weeks — GDELT went live
+  2026-07-09 so a two-week holdout swallows 82% of the corpus
+- Report accuracy + per-class F1 on **both** val and the human holdout,
+  **against a pretrained-only FinBERT baseline**. Without that comparison
+  there is no evidence fine-tuning did anything; without the holdout there is
+  no evidence it is *right*, only that it agrees with Llama
 - Decide weight hosting (Kaggle dataset vs HF hub) and record which weights
   scored each row in `item_score.model_version`
 

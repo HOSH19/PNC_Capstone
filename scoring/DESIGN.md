@@ -38,7 +38,12 @@ no effect on the labeling batch or on verification work in flight.
 | 2026-07-17 | Corpus accounting uses a **six-stage funnel**; the export dry-run must report all six counts. | Mentor feedback: raw totals hide cross-source duplication (same story via GDELT / Alpha Vantage / NewsAPI / RSS / syndication domains); the funnel exposes the real working-set size. Stages in "Target selection" below. |
 | 2026-07-25 | **Bank attribution is gated at the aggregation layer, not in `eligibility`.** Every eligible item is still labeled and scored; a separate check decides whether that score counts toward the bank it was filed under. | Measured on the 2026-07-22 batch: only **726 of 7,756** GDELT titles (9.4%) name the bank they were fetched under, and **21 of 30** signal-bearing gold-slice rows are attributed to the wrong bank. Gating this inside `eligibility` would kill the false signals but drop ~90% of the training corpus — and those rows are *valid* text→direction training examples ("Bandhan Bank Q1 crash → negative" teaches what bank distress reads like; it just isn't JPMorgan's). Keeping the two axes separate preserves the corpus and removes the false signal. Note the split by treatment: analyst/holder wire templates are a *different* problem — their directional labels are wrong-entity by construction, so they are **dropped** at Stage 1 (target selection item 3), not merely left unattributed. Only the "bank not named in its own title" class is deferred to attribution. See "Bank attribution" below. |
 | 2026-07-24 | **`bank_id` is provenance, not a model feature.** FinBERT scores `text` (title, or title+excerpt for EDGAR) → direction only; the bank is attributed from `raw_item.bank_id` (the query the row was fetched under) at the aggregation layer, never from the model input. Text-only train/serve is intentional, not a gap. | Risk direction is largely bank-agnostic — "deposit outflows" is negative for any bank — so `bank_id` in the input would not improve classification. The real failure mode is *attribution*: a row fetched under bank X whose title is actually about entity Y (bank-as-analyst / holder / CEO cases — "TD issues forecast for Louisiana-Pacific", "HSBC invests in MSC", "Dimon warns UK"). That is an upstream relevance question (is the bank the subject?), not something a small encoder learns reliably from noisy labels; the human labels already mark these `neutral`. Revisit only if a stratified eval shows attribution errors a relevance gate can't fix. |
-| 2026-08-07 | **Quality gate computed** over gold slices 1–6 (`pipeline/quality_gate.py` → `evals/gate_report_2026-08-07.md`). Headline (random slices 1–5): 221/250 = 88.4%. **The ≥85% placeholder is not a usable threshold** — 91.6% of human labels in the random sample are `neutral`, so an all-`neutral` labeler scores 91.6% and beats both the threshold and Llama. The gate must be restated in chance-corrected terms: **kappa 0.473 random / 0.564 pooled, macro-F1 0.648 / 0.700**. Per-class verdict still open. | Slice 6 is a deliberate directional oversample, so it strengthens per-class cells (negative n 7→14, positive 14→34) but is excluded from the headline. Decision-relevant finding: llama-side negative precision 13/36 = 36.1%, and **the training-set hygiene filters remove 0 of those 21 mislabels** — 11 are analyst/rating rows in the `keep for now` class, the rest are tone-negative general news. So this is a labeling-prompt defect, not a filter gap, and it lands directly on the ~188 `negative` training rows. |
+| 2026-08-07 | **Quality gate computed** over gold slices 1–6 (`pipeline/quality_gate.py` → `evals/gate_report_2026-08-07.md`). Headline (random slices 1–5): 221/250 = 88.4%. **The ≥85% placeholder is not a usable threshold** — 91.6% of human labels in the random sample are `neutral`, so an all-`neutral` labeler scores 91.6% and beats both the threshold and Llama. The gate must be restated in chance-corrected terms: **kappa 0.473 random / 0.564 pooled, macro-F1 0.648 / 0.700**. Per-class verdict still open. | Slice 6 is a deliberate directional oversample, so it strengthens per-class cells (negative n 7→14, positive 14→34) but is excluded from the headline. Decision-relevant finding: llama-side negative precision 13/36 = 36.1%, and **the training-set hygiene filters remove 0 of those 21 mislabels** — 11 are analyst/rating rows in the `keep for now` class, the rest are tone-negative general news. So this is a labeling-prompt defect, not a filter gap, and it lands directly on the ~186 `negative` training rows. |
+| 2026-08-07 | **Acceptance criteria are fixed before a labeling run, not after** (`quality_gate.CRITERIA`), and every directional criterion is **paired** with its opposite (precision with recall). Kappa is primary; raw agreement is not a criterion at all. | A single-sided criterion is gameable in the direction the fix pushes: told to raise `negative` precision, a labeler passes by ceasing to emit `negative`. Fixing the bar beforehand also stops the threshold from being renegotiated once the result is visible, which matters because we already retired one threshold for being unusable. |
+| 2026-08-07 | **Gold rows are split dev / holdout** (`quality_gate.stratum_for`); prompts are tuned against dev only, and holdout rows are excluded from the FinBERT training set. Slice 6 is halved by file order rather than assigned whole. | Otherwise the human rows scatter into train/val by publication date and no human-truth evaluation survives — measured, 168 of 300 went to train. Slice 6 is the directional oversample, so assigning it whole to dev left the holdout with 3 `negative` rows; halving by file order keeps both sides usable and cannot be re-cut favourably later. The holdout is **semi-blind**: the gate report lists every disagreeing row. |
+| 2026-08-07 | **Relabel before training, and pilot the relabel on the 300 gold rows before running all 8,360.** | Training first cannot answer whether relabeling is needed: validation labels come from the same labeler, so a high `negative` F1 would mean the model reproduced the error faithfully, and a low one confounds label noise with class scarcity (186 rows) and FinBERT's tone prior. The pilot costs ~2 min of GPU and no human time, because the 300 human labels already exist and `quality_gate.py` scores the result immediately. |
+| 2026-08-07 | **Prompt v3** (`evals/prompts/jiwon_llama_v3.md`) leads with a subject test, closes `negative`'s open-ended euphemism clause, and rebalances the examples to neutral 9 / negative 6 / positive 3. v2 is kept as the provenance of `labels_2026-07-22.csv`. | v2 opened with "news articles about US banks", which asserted the premise the labeler most often got wrong — only 9.4% of GDELT titles name their own bank, and 13 of 25 dev disagreements are bank-as-analyst rows. "US" also contradicted the labeling guide. The examples are the real lever: `max_tokens=4` with guided choice means step-by-step instructions cannot execute as reasoning, and v2's negative-heavy example set was itself pushing the negative prior. |
+| 2026-08-07 | **The prompt file is the only source of its own version**; `kaggle_llama_labeling.py` reads the `<!-- prompt_version -->` marker and validates it before the GPU work. | The driver previously carried a `PROMPT_VERSION` constant beside a marker in the prompt file, so pointing it at a v3 file would have written `"v2"` into `model_meta` — a provenance field that lies is worse than no field. |
 
 ## Shared contract (the only cross-team surface)
 
@@ -142,26 +147,109 @@ bookkeeping (e.g. `llm_status='labeled'`), but the source of truth is
 - Measure per-class disagreement vs `llama_kaggle`. Random noise is tolerable
   (fine-tuning is robust to it); **systematic bias is not** (e.g. all
   regulatory news labeled negative) — the review focuses on finding patterns.
-- **Quality gate (threshold TBD by team, placeholder: ≥85% agreement overall,
-  no class below 75%).** If the gate fails: revise prompt → relabel → if it
-  still fails, activate the **Gemini challenger**: label the same corpus with
-  `label_source='gemini'`, hand-review focuses on Llama/Gemini disagreement
-  rows (`GROUP BY raw_item_id HAVING count(DISTINCT label) > 1`), and the team
-  picks the champion on measured agreement with human labels.
+- ~~Quality gate: ≥85% agreement overall, no class below 75%.~~ **Retired
+  2026-08-07 — do not use.** Measured on the 250 random gold rows, 91.6% of
+  human labels are `neutral`, so a labeler that answers `neutral` to every row
+  scores 91.6% and passes a threshold Llama's real 88.4% also passes. Raw
+  agreement cannot separate a working labeler from a broken one here.
+- **Read the gate chance-corrected instead.** `pipeline/quality_gate.py`
+  reports Cohen's kappa, macro-F1, and the majority baseline alongside raw
+  agreement, plus per-class figures in **both** directions — the old wording
+  said "no class below 75%" without saying below 75% *of what*, and the two
+  denominators disagree sharply (v2 `negative`: 92.9% human-side, 36.1%
+  llama-side).
+- **Acceptance criteria live in `quality_gate.CRITERIA`**, fixed before a run
+  so they cannot be renegotiated after seeing its result. Every directional
+  criterion is **paired**: precision alone is passed by a labeler that stops
+  emitting the class, recall alone by one that emits it everywhere. Kappa is
+  primary. Current bar: kappa ≥0.60, `negative` precision ≥0.60 *with* recall
+  ≥0.85, `positive` precision ≥0.60, `neutral` recall ≥0.82.
+- **Gold rows are split dev / holdout** (`quality_gate.stratum_for`, fixed
+  2026-08-07). A prompt may be tuned against `dev` only; `holdout` is read
+  once and is excluded from the FinBERT training set. Slice 6 is halved by
+  file order rather than assigned whole — it is the directional oversample,
+  and giving it entirely to dev left the holdout with 3 negative rows. The
+  holdout is **semi-blind, not blind**: the gate report lists every
+  disagreeing row, holdout included. Say so in the write-up.
+- If the gate fails: revise prompt → relabel → if it still fails, activate the
+  **Gemini challenger**: label the same corpus with `label_source='gemini'`,
+  hand-review focuses on Llama/Gemini disagreement rows (`GROUP BY
+  raw_item_id HAVING count(DISTINCT label) > 1`), and the team picks the
+  champion on measured agreement with human labels.
+- **Relabeling is piloted on the 300 gold rows first** (≈2 min of GPU), and
+  the full 8,360-row run happens only if the pilot clears the criteria. The
+  human labels already exist, so the pilot costs no human time and answers
+  the only question the full run would.
+
+### The finding that gates Stage 2 (measured 2026-08-07)
+
+The headline number is not the result. **When Llama says `negative`, it is
+right 13 times out of 36 — 36.1%.** Humans read two thirds of those rows as
+`neutral`. That single figure decides whether Stage 2 can start, because
+directional labels are the entire training signal and `neutral` accuracy is
+free on a corpus that is ~90% `neutral`.
+
+Three things make it a decision rather than an observation:
+
+1. **It is structural, not sampling noise.** On the 250 random rows the figure
+   was 6/16 = 37.5%. Slice 6 more than doubled the directional sample, to
+   13/36, and it barely moved — 36.1%. A 16-row reading invites "wait for more
+   data"; the same value at 36 rows does not.
+2. **The training-set filters do not touch it.** Of the 21 rows where Llama
+   said `negative` and a human said `neutral`, the hygiene filters remove
+   **zero**. Eleven are analyst/rating rows — the bank is the *analyst* and
+   another company is the subject ("CAE cut to Underweight at Morgan Stanley")
+   — which is exactly the `keep for now` class in the table below. The rest
+   are ordinary tone-negative news ("IBM stock sinks 22%", a branch robbery).
+   So this is a **labeling-prompt defect, not a filter gap**, and no amount of
+   filter work fixes it.
+3. **It lands where the data is thinnest.** The assembled training set holds
+   186 `negative` rows. If roughly two thirds carry the wrong direction, the
+   real `negative` signal is on the order of 60 rows, and the fine-tune learns
+   the analyst-attribution error as a rule.
+
+This is the "systematic bias is not tolerable" case named two bullets up, and
+it is why prompt v3 (`evals/prompts/jiwon_llama_v3.md`) leads with the subject
+test. Note also that training on the current labels cannot *diagnose* this:
+the validation labels are the same Llama labels, so a high `negative` F1 there
+would mean the model faithfully reproduced the error.
+
+**What the human side is, exactly.** Slices 1–5 were labeled once and then
+*reviewed* by a second person; slice 6 was labeled fresh. No blind independent
+second pass exists, so the project has **no inter-annotator agreement
+statistic and cannot derive one from this** — a reviewer who sees the first
+answer mostly agrees with it. The labels are better than a single pass, but
+the ceiling these kappa numbers sit under is unknown. State this as a
+methodology limitation rather than implying an IAA number exists.
 
 ## Stage 2 — Training (fine-tune FinBERT)
 
 Pretrained-only FinBERT is not sufficient per the mentor; fine-tune on the
 stage-1 labels. Same Kaggle GPU environment as labeling (workflow reuse).
 
+Assembled by `pipeline/export_training_set.py` (local, pure and tested), then
+fine-tuned by `pipeline/kaggle_finbert_train.py` (GPU glue only).
+
 - Training set: `item_label` rows from the champion labeler, with `human`
   rows overriding the champion's where both exist.
-- Split: **time-based** train/validation (e.g. last N weeks held out) rather
-  than random — matches serving reality and avoids syndication near-duplicates
-  leaking across the split. Watch per-bank concentration (a few banks dominate
-  GDELT volume).
-- Report accuracy + per-class F1 on the held-out slice; compare against
-  pretrained-only FinBERT as the baseline to demonstrate the fine-tune helped.
+- Split: **time-based** train/validation rather than random — matches serving
+  reality and avoids syndication near-duplicates leaking across the split.
+  Watch per-bank concentration (a few banks dominate GDELT volume).
+  Measured in **days, not "last N weeks"**: GDELT polling went live
+  2026-07-09, so 94% of the 2026-07-22 batch falls in its final 13 days and a
+  two-week holdout put 82% of the corpus in validation. Default 3 days.
+- **Three outputs, not two.** The human holdout stratum leaves train *and*
+  val and is written as its own CSV. Without it the gold rows scatter across
+  the split by publication date (measured: 168 into train, 48 into val, 84
+  dropped by hygiene), so more than half the human ground truth is spent on
+  training and val is ~30:1 Llama-labeled. **Metrics on val measure agreement
+  with the labeler, not accuracy** — and the labeler is known to be wrong two
+  times in three on `negative`. Only the holdout answers "is it right".
+- Report accuracy + per-class F1 on **both** val and the human holdout,
+  labeled so the two are not confused; compare against pretrained-only
+  FinBERT as the baseline to demonstrate the fine-tune helped.
+- Class weights are inverse-frequency: the corpus is ~90% `neutral` while the
+  distress index depends on the rare directional classes.
 - Artifact: model weights versioned outside the repo (Kaggle dataset or HF
   hub, TBD); `item_score.model_version` records which weights scored each row.
 
@@ -176,11 +264,23 @@ When the gate does resolve, some rows should be excluded from the training set.
 This is a **filter where the training set is assembled** — it needs no change
 to `eligibility`, no re-export, and no re-labeling:
 
+Counts below are as **implemented and re-measured 2026-08-07** by
+`export_training_set.py` against the 2026-07-22 batch:
+
 | Class | Rows | Directional labels | Action |
 |---|---|---|---|
 | Contentless EDGAR (10-Q / 10-K/A, no excerpt) | 107 | 0 | exclude — degenerate, all `neutral` |
-| Holdings/13F wire spam ("X Purchases N Shares of Y") | 723 | 51 | exclude — directions are wrong-entity |
-| Rating / price-target templates | 375 | 123 | **keep for now** — see below |
+| Holdings/13F wire spam ("X Purchases N Shares of Y") | **983** | 43 | exclude — directions are wrong-entity |
+| Rating / price-target templates | 571 | 157 | **keep for now** — see below |
+| Duplicate titles (cross-source, case-insensitive) | 385 | — | exclude — leakage across the split |
+| Human holdout stratum | 132 | 20 | exclude from train/val — see Stage 2 |
+
+The spam row read 723/51 in the original estimate. That predicate was never
+kept, and this section's own instruction was to "settle in the export
+script"; the settled predicate is structural — it fires only on
+two-entity templates ("X purchases N shares of Y", "Y shares sold by X",
+"X invests $N in Y"), and its overlap with the rating class was measured at
+**zero**. The rating class is correspondingly larger than the earlier 375.
 
 The third class is **not** safely droppable yet. The same surface form covers
 opposite roles:
@@ -322,8 +422,18 @@ a rare-event evaluation and must be designed accordingly.
 ## Open items (team decisions — README: "teammates own all design decisions")
 
 - [ ] Owner of scoring/ (currently TBD)
-- [ ] Quality-gate thresholds (placeholders above)
-- [ ] Exact syndication-noise predicate for target selection
+- [ ] **Quality-gate thresholds — the team still has to confirm these, but the
+      old placeholders are retired, not pending.** Confirm the chance-corrected
+      bar in `quality_gate.CRITERIA` (kappa ≥0.60 and the paired per-class
+      figures), not "≥85% overall / ≥75% per class", which a do-nothing labeler
+      passes.
+- [x] Exact syndication-noise predicate for target selection — settled in
+      `export_training_set.HOLDINGS_SPAM` (two-entity templates only, 983 rows,
+      zero overlap with the rating class). Still to move into `eligibility`
+      before Stage 3 serving ships.
+- [ ] Whether the rating / price-target class (571 rows, 157 directional) can
+      be split by subject-vs-agent instead of kept wholesale — 11 of the 21
+      `negative` mislabels live here
 - [ ] Model-weights hosting (Kaggle dataset vs HF hub)
 - [ ] `probs` as jsonb vs three numeric columns (jsonb chosen for now; revisit
       if the dashboard needs to sort/filter on probabilities directly)
