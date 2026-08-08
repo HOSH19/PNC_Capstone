@@ -35,12 +35,102 @@ widgets — see render_* functions below and the CSS block in main().
 """
 
 from datetime import date, timedelta
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Bank Stability Monitor", layout="wide")
+
+# Wired to index/mock/*.csv, column-for-column matches to
+# db/migrations/012_index_tables.sql (bank_index_score / bank_index_feature).
+# Swapping to a real DB read later is a change to _INDEX_SCORES/_INDEX_FEATURES
+# only — load_fundamentals_mock() and every render_* function stay as-is.
+_INDEX_MOCK_DIR = Path(__file__).resolve().parent.parent / "index" / "mock"
+_INDEX_SCORES = pd.read_csv(_INDEX_MOCK_DIR / "bank_index_score_sample.csv")
+_INDEX_FEATURES = pd.read_csv(_INDEX_MOCK_DIR / "bank_index_feature_sample.csv")
+
+_BAND_LABEL = {"sound": "Sound", "neutral": "Neutral", "distress": "Distress signal"}
+_STATUS_DISPLAY = {
+    "within_range": "within range",
+    "near_threshold": "near threshold",
+    "breach": "outside range",
+}
+# feature_name -> CAMELS group; not a schema column (see 012's comment on
+# bank_index_feature), so the mapping lives here alongside the other display
+# concerns the dashboard owns.
+_FEATURE_GROUP = {
+    "tier1_capital_ratio": "Capital",
+    "npl_ratio": "Credit Quality",
+    "cre_to_capital": "Credit Quality",
+    "liquidity_ratio": "Liquidity",
+    "fee_income_ratio": "Profitability",
+}
+
+
+def _quarter_label(quarter_end_date: str) -> str:
+    year, month, _ = quarter_end_date.split("-")
+    q = {"03": "Q1", "06": "Q2", "09": "Q3", "12": "Q4"}[month]
+    return f"{q} '{year[2:]}"
+
+
+def _format_threshold(text) -> str:
+    # threshold_text is NULL until Ming's scoring loader backfills it
+    # (backtest not done yet) — render code needs a plain string, not NaN.
+    if pd.isna(text):
+        return "—"
+    return text.replace(">=", "≥").replace("<=", "≤").replace(" - ", " – ")
+
+
+def load_fundamentals_mock(bank_id: str) -> dict | None:
+    """Build a `fundamentals` dict (MOCK_BANKS shape) from the index mock CSVs.
+
+    Returns None if `bank_id` isn't in the mock score sample, same as a
+    hand-written entry omitting fundamentals.
+    """
+    bank_scores = _INDEX_SCORES[_INDEX_SCORES["bank_id"] == bank_id].sort_values(
+        "quarter_end_date"
+    )
+    if bank_scores.empty:
+        return None
+    latest = bank_scores.iloc[-1]
+
+    cert = bank_scores["fdic_cert_number"].iloc[0]
+    bank_features = _INDEX_FEATURES[
+        _INDEX_FEATURES["fdic_cert_number"] == cert
+    ].sort_values("quarter_end_date")
+
+    features = []
+    for name, group_df in bank_features.groupby("feature_name", sort=False):
+        values = list(group_df.sort_values("quarter_end_date")["value"])
+        row = group_df.iloc[-1]
+        features.append(
+            {
+                "group": _FEATURE_GROUP.get(name, "Capital"),
+                "name": row["display_name"],
+                "prior": values[-2] if len(values) > 1 else values[-1],
+                "latest": values[-1],
+                "threshold": _format_threshold(row["threshold_text"]),
+                # status is NULL until Ming's scoring loader backfills it too —
+                # falls back to a fourth, unstyled state (render_fundamentals'
+                # status_colors has no "unknown" entry, so it renders muted).
+                "status": (
+                    _STATUS_DISPLAY.get(row["status"], row["status"])
+                    if pd.notna(row["status"])
+                    else "unknown"
+                ),
+                "history": values,
+            }
+        )
+
+    return {
+        "score": round(latest["score"]),
+        "label": _BAND_LABEL.get(latest["band"], latest["band"]),
+        "trend": [round(s) for s in bank_scores["score"]],
+        "quarters": [_quarter_label(d) for d in bank_scores["quarter_end_date"]],
+        "features": features,
+    }
 
 MACRO = {
     "series": "St. Louis Fed Financial Stress Index",
@@ -103,32 +193,7 @@ MOCK_BANKS = {
         "alerts": [
             {"severity": "high", "text": "2 open Fed/FDIC enforcement actions this quarter (up from 1) — regulatory conduct risk"},
         ],
-        "fundamentals": {
-            "score": 84,
-            "label": "Neutral",
-            "trend": [92, 91, 90, 90, 89, 87, 86, 84],
-            "quarters": [
-                "Q2 '24", "Q3 '24", "Q4 '24", "Q1 '25",
-                "Q2 '25", "Q3 '25", "Q4 '25", "Q1 '26",
-            ],
-            "peer_percentile": 58,
-            "features": [
-                {"group": "Capital", "name": "Tier 1 capital ratio %", "prior": 12.1, "latest": 11.8,
-                 "threshold": "≥ 9.0", "status": "within range", "history": [12.6, 12.4, 12.3, 12.1, 11.8]},
-                {"group": "Capital", "name": "Unrealized securities losses / Tier 1 %", "prior": 9.2, "latest": 10.1,
-                 "threshold": "≤ 15", "status": "within range", "history": [8.0, 8.4, 8.8, 9.2, 10.1]},
-                {"group": "Credit Quality", "name": "NPL ratio %", "prior": 0.9, "latest": 1.2,
-                 "threshold": "≤ 2.0", "status": "within range", "history": [0.6, 0.7, 0.8, 0.9, 1.2]},
-                {"group": "Credit Quality", "name": "CRE / total capital %", "prior": 64, "latest": 69,
-                 "threshold": "≤ 120", "status": "within range", "history": [58, 60, 62, 64, 69]},
-                {"group": "Credit Quality", "name": "Loan loss allowance ratio %", "prior": 1.11, "latest": 1.15,
-                 "threshold": "≥ 1.0", "status": "within range", "history": [1.05, 1.08, 1.10, 1.11, 1.15]},
-                {"group": "Liquidity", "name": "Liquidity ratio %", "prior": 6.4, "latest": 5.9,
-                 "threshold": "2.0 – 7.0", "status": "within range", "history": [7.0, 6.8, 6.6, 6.4, 5.9]},
-                {"group": "Profitability", "name": "Fee income / revenue %", "prior": 28.4, "latest": 26.1,
-                 "threshold": "≥ 25.0", "status": "near threshold", "history": [30.0, 29.4, 28.9, 28.4, 26.1]},
-            ],
-        },
+        "fundamentals": load_fundamentals_mock("wfc"),
         "recent_items": [
             ("Regulator signals fresh penalties over consumer-billing practices", "negative", "reuters.com", 2, "GDELT"),
             ("8-K — Item 8.01: settlement of outstanding consent order disclosed", "neutral", "sec.gov", 3, "EDGAR"),
@@ -212,32 +277,7 @@ MOCK_BANKS = {
         "alerts": [
             {"severity": "high", "text": "2 open Fed/FDIC enforcement actions this quarter (up from 1)"},
         ],
-        "fundamentals": {
-            "score": 76,
-            "label": "Distress signal",
-            "trend": [95, 92, 89, 86, 86, 82, 79, 76],
-            "quarters": [
-                "Q2 '24", "Q3 '24", "Q4 '24", "Q1 '25",
-                "Q2 '25", "Q3 '25", "Q4 '25", "Q1 '26",
-            ],
-            "peer_percentile": 15,
-            "features": [
-                {"group": "Capital", "name": "Tier 1 capital ratio %", "prior": 10.4, "latest": 9.6,
-                 "threshold": "≥ 9.0", "status": "near threshold", "history": [11.5, 11.1, 10.8, 10.4, 9.6]},
-                {"group": "Capital", "name": "Unrealized securities losses / Tier 1 %", "prior": 19.5, "latest": 24.0,
-                 "threshold": "≤ 15", "status": "outside range", "history": [14.0, 15.8, 17.2, 19.5, 24.0]},
-                {"group": "Credit Quality", "name": "NPL ratio %", "prior": 1.6, "latest": 2.3,
-                 "threshold": "≤ 2.0", "status": "outside range", "history": [1.0, 1.2, 1.4, 1.6, 2.3]},
-                {"group": "Credit Quality", "name": "CRE / total capital %", "prior": 141, "latest": 148,
-                 "threshold": "≤ 120", "status": "outside range", "history": [128, 132, 136, 141, 148]},
-                {"group": "Credit Quality", "name": "Loan loss allowance ratio %", "prior": 1.3, "latest": 1.6,
-                 "threshold": "≥ 1.0", "status": "within range", "history": [1.0, 1.1, 1.2, 1.3, 1.6]},
-                {"group": "Liquidity", "name": "Liquidity ratio %", "prior": 3.1, "latest": 2.2,
-                 "threshold": "2.0 – 7.0", "status": "near threshold", "history": [4.2, 3.8, 3.4, 3.1, 2.2]},
-                {"group": "Profitability", "name": "Fee income / revenue %", "prior": 19.8, "latest": 18.9,
-                 "threshold": "≥ 25.0", "status": "outside range", "history": [22.0, 21.2, 20.5, 19.8, 18.9]},
-            ],
-        },
+        "fundamentals": load_fundamentals_mock("wal"),
         "recent_items": [
             ("Ratings agency places regional lender on negative watch", "negative", "reuters.com", 0, "GDELT"),
             ("8-K — Item 7.01: investor presentation on liquidity position", "neutral", "sec.gov", 1, "EDGAR"),
@@ -281,14 +321,14 @@ MOCK_BANKS = {
         "cert": "6384",
         "rssd": "817824",
         "status": "Stable",
-        "summary": "Placeholder — no illustrative sentiment/fundamentals data drafted yet.",
+        "summary": "Placeholder — no illustrative sentiment data drafted yet. Fundamentals below are wired to index/mock/*.csv.",
         "momentum": {"duration": "steady", "direction": "stable"},
         "peer_group": "Super-regional / diversified banks",
         "peer_group_n": 15,
         "sentiment": None,
         "keywords": None,
         "alerts": [],
-        "fundamentals": None,
+        "fundamentals": load_fundamentals_mock("pnc"),
         "recent_items": [],
         "price_risk": {
             "risk_badge": "Low",
@@ -331,14 +371,14 @@ MOCK_BANKS = {
         "cert": "628",
         "rssd": "852218",
         "status": "Stable",
-        "summary": "Placeholder — no illustrative sentiment/fundamentals data drafted yet.",
+        "summary": "Placeholder — no illustrative sentiment data drafted yet. Fundamentals below are wired to index/mock/*.csv.",
         "momentum": {"duration": "steady", "direction": "stable"},
         "peer_group": "US Systemically Important Banks (G-SIBs)",
         "peer_group_n": 8,
         "sentiment": None,
         "keywords": None,
         "alerts": [],
-        "fundamentals": None,
+        "fundamentals": load_fundamentals_mock("jpm"),
         "recent_items": [],
         "price_risk": {
             "risk_badge": "Low",
@@ -734,6 +774,46 @@ div[class*="st-key-card-"] {{
     margin-left: 4px;
     vertical-align: middle;
 }}
+/* <details>/<summary> version: tap/click to open, unlike .info-dot's
+   hover-only native title tooltip which touch devices can't trigger. */
+.info-pop {{
+    position: relative;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 4px;
+}}
+.info-pop summary {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid {TEXT_MUTED};
+    color: {TEXT_MUTED};
+    font-size: 0.62rem;
+    cursor: pointer;
+    list-style: none;
+}}
+.info-pop summary::-webkit-details-marker {{ display: none; }}
+.info-pop[open] summary {{ color: {ACCENT_TEAL}; border-color: {ACCENT_TEAL}; }}
+.info-pop .info-pop-body {{
+    position: absolute;
+    top: 20px;
+    left: 0;
+    width: 240px;
+    background: {BG_CARD};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
+    color: {TEXT_PRIMARY};
+    z-index: 20;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}}
 .subtitle-list {{
     margin: 4px 0 14px 0;
     padding-left: 18px;
@@ -931,16 +1011,7 @@ def render_fundamentals(bank: dict) -> None:
         if trend:
             quarters = fundamentals.get("quarters") or [f"Q-{i}" for i in range(len(trend) - 1, -1, -1)]
             window = 4
-            if len(quarters) > window:
-                end_idx = st.slider(
-                    "Drag left for earlier quarters",
-                    min_value=window - 1,
-                    max_value=len(quarters) - 1,
-                    value=len(quarters) - 1,
-                    key=f"score_window_{bank['ticker']}",
-                )
-            else:
-                end_idx = len(quarters) - 1
+            end_idx = len(quarters) - 1
             start_idx = max(0, end_idx - window + 1)
             shown_quarters = quarters[start_idx:end_idx + 1]
             shown_trend = trend[start_idx:end_idx + 1]
@@ -988,7 +1059,8 @@ def render_fundamentals(bank: dict) -> None:
             st.markdown(
                 "<table class='fund-table'><thead><tr>"
                 "<th>Feature</th><th>Prior Q</th><th>Latest Q</th>"
-                f'<th>Δ QoQ <span class="info-dot" title="{qoq_help}">?</span></th>'
+                f'<th>Δ QoQ <details class="info-pop"><summary>?</summary>'
+                f'<div class="info-pop-body">{qoq_help}</div></details></th>'
                 "<th>Threshold</th><th>Status</th>"
                 f"</tr></thead><tbody>{rows_html}</tbody></table>",
                 unsafe_allow_html=True,
