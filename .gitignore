@@ -19,8 +19,9 @@ labels_*.csv
 index/v1_archive/
 index/v2_rework/
 index/v3/
-index/data/
+index/data/*
 !index/data/scores_gp50_fixed_v1.csv
+!index/data/bank_index_score_backfill.parquet
 
 # Chinese drafts — English versions are the committed ones
 *_zh.md
