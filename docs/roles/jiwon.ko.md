@@ -152,8 +152,8 @@ F1을 부실 탐지 능력의 근거로 보고하지 말 것 — 학습 38행도
 
 ### 4. FinBERT 파인튜닝 ✔ 실행 완료 2026-08-09
 
-`evals/finbert_metrics_2026-08-09.json`; 가중치는 저장소 밖에 `finbert-ft-2026-08-09`
-(Kaggle 데이터셋)로 있다. 인간 정답 홀드아웃 132행에서 pretrained-only FinBERT
+`evals/finbert_metrics_2026-08-09.json`; 가중치는 저장소 밖 private Kaggle
+데이터셋 `chloejiwon/finbert-ft-2026-08-09`에 있다. 인간 정답 홀드아웃 132행에서 pretrained-only FinBERT
 대비 **macro-F1 0.410 → 0.656**, 세 클래스 모두 상승.
 
 **macro-F1을 보고하고 accuracy는 쓰지 말 것.** 파인튜닝 accuracy 0.841인데

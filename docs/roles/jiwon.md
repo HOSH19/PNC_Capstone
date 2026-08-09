@@ -157,8 +157,8 @@ training rows nor the 6 in the holdout can support that claim.
 
 ### 4. Fine-tune FinBERT ✔ run 2026-08-09
 
-`evals/finbert_metrics_2026-08-09.json`; weights are outside the repo as
-`finbert-ft-2026-08-09` (Kaggle dataset). On the 132-row human holdout,
+`evals/finbert_metrics_2026-08-09.json`; weights are outside the repo in the
+private Kaggle dataset `chloejiwon/finbert-ft-2026-08-09`. On the 132-row human holdout,
 **macro-F1 0.410 → 0.656** against pretrained-only FinBERT, every class up.
 
 **Report macro-F1, never accuracy.** Fine-tuned accuracy is 0.841 where an
