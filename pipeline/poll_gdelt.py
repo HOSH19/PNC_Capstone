@@ -23,6 +23,7 @@ from pipeline.http import throttled_get
 
 API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 MAX_RECORDS = 250
+THROTTLE_S = 8.0
 OVERLAP = timedelta(minutes=15)
 FIRST_RUN_LOOKBACK = timedelta(hours=72)
 MIN_WINDOW = timedelta(minutes=1)  # bisect guard
@@ -32,14 +33,16 @@ def _fmt(dt: datetime) -> str:
     return dt.strftime("%Y%m%d%H%M%S")
 
 
-def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
+def fetch_window(
+    query: str, start: datetime, end: datetime, throttle_s: float = THROTTLE_S
+) -> list[dict]:
     # GDELT rejects parentheses around anything that is not an OR list
     # ("Parentheses may only be used around OR'd statements").
     wrapped = f"({query})" if " OR " in query else query
     resp = throttled_get(
         API_URL,
         label="GDELT",
-        throttle_s=8.0,
+        throttle_s=throttle_s,
         params={
             "query": wrapped,
             "mode": "artlist",
@@ -58,7 +61,9 @@ def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
     if len(articles) >= MAX_RECORDS:
         if (end - start) > MIN_WINDOW:
             mid = start + (end - start) / 2
-            return fetch_window(query, start, mid) + fetch_window(query, mid, end)
+            return fetch_window(query, start, mid, throttle_s) + fetch_window(
+                query, mid, end, throttle_s
+            )
         # GDELT ingests in 15-minute batches, so seendates cluster on batch
         # boundaries: a full page at the minimum window cannot be split
         # further, and the API has no cursor to page past 250. Anything older
