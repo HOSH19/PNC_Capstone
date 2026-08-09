@@ -150,7 +150,21 @@ v3(`labels_ensemble_full.csv`). 두 프롬프트를 8,360행 전량에 돌렸고
 F1을 부실 탐지 능력의 근거로 보고하지 말 것 — 학습 38행도, 홀드아웃 6행도
 그 주장을 지탱하지 못한다.
 
-### 4. FinBERT 파인튜닝 — 스크립트 ✔, 실행은 재라벨링에 막혀 있음
+### 4. FinBERT 파인튜닝 ✔ 실행 완료 2026-08-09
+
+`evals/finbert_metrics_2026-08-09.json`; 가중치는 저장소 밖에 `finbert-ft-2026-08-09`
+(Kaggle 데이터셋)로 있다. 인간 정답 홀드아웃 132행에서 pretrained-only FinBERT
+대비 **macro-F1 0.410 → 0.656**, 세 클래스 모두 상승.
+
+**macro-F1을 보고하고 accuracy는 쓰지 말 것.** 파인튜닝 accuracy 0.841인데
+전부-`neutral` 라벨러가 0.848을 받는다 — 게이트 임계치를 폐기시킨 것과 같은
+함정이다. 그리고 `negative` F1 0.545는 6행 위에 서 있어 부실 탐지의 근거가
+되지 못한다.
+
+남은 일: 가중치 호스팅을 공식 결정하고, 서빙이 나갈 때 `model_version` 문자열을
+`item_score.model_version`에 기록할 것.
+
+<details><summary>원래 태스크 설명</summary>
 
 `pipeline/kaggle_finbert_train.py` 작성 완료: pretrained 베이스라인 비교,
 빈도 역수 클래스 가중치, val과 인간 홀드아웃 분리 보고.
@@ -172,6 +186,8 @@ F1을 부실 탐지 능력의 근거로 보고하지 말 것 — 학습 38행도
   증거만 남는다
 - 가중치 호스팅 결정(Kaggle 데이터셋 vs HF hub), 각 행을 어떤 가중치가
   채점했는지 `item_score.model_version`에 기록
+
+</details>
 
 ### 5. GDELT 백필, 2020~2024
 

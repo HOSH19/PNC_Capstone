@@ -155,7 +155,21 @@ training data and the backtest window, so it was rejected. Do not report the
 model's `negative` F1 as evidence about distress detection — neither the 38
 training rows nor the 6 in the holdout can support that claim.
 
-### 4. Fine-tune FinBERT — scripts ✔, run still blocked on the relabel
+### 4. Fine-tune FinBERT ✔ run 2026-08-09
+
+`evals/finbert_metrics_2026-08-09.json`; weights are outside the repo as
+`finbert-ft-2026-08-09` (Kaggle dataset). On the 132-row human holdout,
+**macro-F1 0.410 → 0.656** against pretrained-only FinBERT, every class up.
+
+**Report macro-F1, never accuracy.** Fine-tuned accuracy is 0.841 where an
+all-`neutral` labeler scores 0.848 — the same trap that retired the gate
+threshold. And `negative` F1 0.545 rests on 6 rows; it is not evidence about
+distress detection.
+
+Remaining: decide weight hosting formally, and record the `model_version`
+string in `item_score.model_version` when serving ships.
+
+<details><summary>Original task description</summary>
 
 `pipeline/kaggle_finbert_train.py` is written: pretrained-baseline comparison,
 inverse-frequency class weights, val and human-holdout reported separately.
@@ -177,6 +191,8 @@ noise with class scarcity and FinBERT's tone prior. Relabel first.
   no evidence it is *right*, only that it agrees with Llama
 - Decide weight hosting (Kaggle dataset vs HF hub) and record which weights
   scored each row in `item_score.model_version`
+
+</details>
 
 ### 5. GDELT backfill, 2020–2024
 
