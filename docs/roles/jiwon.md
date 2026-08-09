@@ -135,19 +135,25 @@ serving:
 ships**. Filtering only at training time while serving keeps scoring those rows
 creates exactly the train/serve skew the shared filter exists to prevent.
 
-### 3b. Relabel the corpus with the champion — in progress
+### 3b. Relabel the corpus with the champion ✔ done 2026-08-09
 
-Prompt v3 won on kappa (0.650) and macro-F1 (0.808) over v2 and v4, and took
-the analyst-attribution mislabels from 21 to 0. It is **below two acceptance
-criteria** (`negative` recall 0.714, `positive` recall 0.676) and is used
-anyway — see `scoring/DESIGN.md` § "Training on a champion that missed the
-criteria". Short version: v3 fails on recall, which withholds signal and is
-partly recoverable by tuning the serving threshold on `item_score.probs`;
-v2 failed on precision, which teaches a wrong rule that no threshold undoes.
+The champion is a **per-class ensemble**: `negative` from prompt v4, everything
+else from v3 (`labels_ensemble_full.csv`). Both prompts were run over all
+8,360 rows; each reproduced its 300-row pilot exactly, so the runs are
+deterministic. The ensemble beats either parent — kappa 0.683, macro-F1 0.828,
+`negative` 0.923 precision / 0.857 recall — and holds up on the holdout alone
+(0.833 / 0.833 vs v3's 1.000 / 0.667), so it is not fitted to the dev rows.
 
-Run `pipeline/kaggle_llama_labeling.ipynb` over all 8,360 rows with
-`jiwon_llama_v3.md`, then re-run `export_training_set` on the new labels
-before training.
+It still misses `positive` recall (0.676 against 0.70) and is used anyway; see
+`scoring/DESIGN.md` § "Training on a champion that missed the criteria".
+
+**Known limitation, accepted deliberately.** The training set carries **38**
+`negative` rows. v2's 186 were mostly wrong (precision 0.361); correct
+labeling of a 2026-only corpus simply does not yield more. Labeling the
+2020-2024 backfill would, but it would break the leak-free separation between
+training data and the backtest window, so it was rejected. Do not report the
+model's `negative` F1 as evidence about distress detection — neither the 38
+training rows nor the 6 in the holdout can support that claim.
 
 ### 4. Fine-tune FinBERT — scripts ✔, run still blocked on the relabel
 

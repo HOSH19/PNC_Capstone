@@ -59,13 +59,15 @@ QUANTIZATION = "awq"
 # calibration: Llama 3.1 advertises a 131072-token context, and vLLM sizes the
 # KV cache for it up front — 16 GiB, which a 16 GB T4 cannot give after the
 # 5.4 GiB of weights (~7 GiB is left, and startup fails outright). Our prompts
-# are nowhere near that: the longest rendered prompt across both the 300-row
-# pilot and the 8,360-row batch is ~8,030 characters, roughly 2,000-2,700
-# tokens depending on how the EDGAR boilerplate tokenizes. 4096 leaves well
-# over the needed headroom while shrinking the KV reservation ~32x. Raise it
-# only if a longer text field is added; vLLM rejects an over-long prompt
-# rather than truncating it, so overflow fails loudly.
-MAX_MODEL_LEN = 4096
+# are nowhere near that: the longest rendered prompt is ~8,030 characters on
+# prompt v3 and ~9,080 on the longer v4, so roughly 2,300-3,100 tokens
+# depending on how the EDGAR digit-heavy boilerplate tokenizes. 6144 keeps a
+# 2x margin over that while the KV reservation stays ~21x smaller than the
+# native context — well inside the ~7 GiB available. Grow it whenever the
+# prompt or a text field grows: vLLM rejects an over-long prompt rather than
+# truncating it, so overflow costs the whole run, and KV memory is not the
+# binding constraint at this size.
+MAX_MODEL_LEN = 6144
 # The prompt version is NOT a constant here — it is read from the prompt file
 # passed to --prompt, so pointing this at a v4 file cannot record 'v3'.
 
