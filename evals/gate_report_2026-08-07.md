@@ -27,17 +27,18 @@ Kappa 0.473 (random) / 0.564 (pooled) is *moderate* agreement on the conventiona
 
 Fixed before the run so they cannot be renegotiated afterwards. Every directional criterion is **paired**: precision alone is passed by a labeler that stops saying the class at all, recall alone by one that says it everywhere. Raw agreement is deliberately not a criterion.
 
-| criterion | target | current (v2) | n | status |
+| criterion | target | measured | n | status |
 |---|---|---|---|---|
 | kappa (primary) | ≥0.60 | 0.564 | 300 | **below** |
 | negative precision | ≥0.60 | 0.361 | 36 | **below** |
 | negative recall — guards the above | ≥0.85 | 0.929 | 14 | meets |
 | positive precision | ≥0.60 | 0.605 | 43 | meets |
+| positive recall — guards the above | ≥0.70 | 0.765 | 34 | meets |
 | neutral recall — guards over-correction | ≥0.82 | 0.849 | 252 | meets |
 
 Two of these demand improvement (kappa and negative precision — the defects v3 exists to fix); the rest sit at or just under today's value as **no-regression floors**, so a run that fixes negative by breaking positive or neutral fails. A floor already marked `meets` is not slack — it is the level that must survive.
 
-Read these as the bar the *next* run has to clear, not as a verdict on v2 — v2 is the measurement that set them. Note the sample sizes: on the directional rows one row moves the number by several points, so these detect a large effect, not a small one.
+The thresholds were fixed on 2026-08-07 from the prompt-v2 baseline, so reading them against v2 itself shows what was wrong rather than a verdict. Note the sample sizes: on the directional rows one row moves the number by several points, so these detect a large effect, not a small one.
 
 ## Per-class agreement (all rows, both directions)
 

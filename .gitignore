@@ -17,3 +17,6 @@ labels_*.csv
 
 # FinBERT training-set exports (never commit)
 finbert_*.csv
+
+# Kaggle upload staging (build artifact, rebuilt by the notebook recipe)
+kaggle_upload/

@@ -47,8 +47,17 @@ CRITERIA = (
     ("negative precision", ("llama_side", "negative"), 0.60, "≥"),
     ("negative recall — guards the above", ("human_side", "negative"), 0.85, "≥"),
     ("positive precision", ("llama_side", "positive"), 0.60, "≥"),
+    ("positive recall — guards the above", ("human_side", "positive"), 0.70, "≥"),
     ("neutral recall — guards over-correction", ("human_side", "neutral"), 0.82, "≥"),
 )
+# `positive recall` was MISSING from the first version of this table, and v4
+# walked straight through the gap: it passed positive precision at 0.857 while
+# positive recall collapsed to 0.353, because it had nearly stopped saying
+# `positive` at all — the exact failure the pairing rule exists to prevent,
+# left unguarded on one axis. Added 2026-08-09, after the run that exposed it.
+# The threshold is derived the same way as the other floors, by rounding down
+# from the v2 baseline that set this table (positive recall was 0.765 there),
+# NOT chosen to make any particular run pass; v3, the champion, is below it.
 
 # Slices sampled non-randomly (directional oversample); excluded from the
 # headline number and reported as their own stratum.
@@ -305,7 +314,7 @@ def render_report(gate: dict, run_date: str, labels_path: str) -> str:
         "labeler that stops saying the class at all, recall alone by one that "
         "says it everywhere. Raw agreement is deliberately not a criterion.",
         "",
-        "| criterion | target | current (v2) | n | status |",
+        "| criterion | target | measured | n | status |",
         "|---|---|---|---|---|",
         *(
             f"| {c['name']} | ≥{c['target']:.2f} | {c['actual']:.3f} | {c['n']} "
@@ -319,10 +328,11 @@ def render_report(gate: dict, run_date: str, labels_path: str) -> str:
         "positive or neutral fails. A floor already marked `meets` is not "
         "slack — it is the level that must survive.",
         "",
-        "Read these as the bar the *next* run has to clear, not as a verdict on "
-        "v2 — v2 is the measurement that set them. Note the sample sizes: on the "
-        "directional rows one row moves the number by several points, so these "
-        "detect a large effect, not a small one.",
+        "The thresholds were fixed on 2026-08-07 from the prompt-v2 baseline, so "
+        "reading them against v2 itself shows what was wrong rather than a "
+        "verdict. Note the sample sizes: on the directional rows one row moves "
+        "the number by several points, so these detect a large effect, not a "
+        "small one.",
         "",
         "## Per-class agreement (all rows, both directions)",
         "",

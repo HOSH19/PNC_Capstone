@@ -114,6 +114,18 @@ def test_criteria_catch_the_degenerate_never_say_negative_labeler():
     assert not guard["passed"]  # the pair is what rejects this labeler
 
 
+def test_every_directional_precision_has_a_paired_recall():
+    """The gap v4 walked through: `positive precision` shipped without a
+    `positive recall` beside it, so a labeler that nearly stopped saying
+    `positive` scored 0.857 on the only positive criterion there was."""
+    from pipeline.quality_gate import CRITERIA
+
+    families = {(family, key) for _, (family, key), _, _ in CRITERIA}
+    for label in ("positive", "negative"):
+        assert ("llama_side", label) in families, f"no precision for {label}"
+        assert ("human_side", label) in families, f"precision unpaired for {label}"
+
+
 def test_criteria_report_sample_size_with_each_number():
     gold = [_gold("1", "negative"), _gold("2", "neutral"), _gold("3", "neutral")]
     llama = {"1": "negative", "2": "neutral", "3": "negative"}

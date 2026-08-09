@@ -66,8 +66,9 @@ rows (slices 1–6). What it found, and what changed as a result:
   second half of 6). Tune prompts on dev only.
 
 Next: run prompt v3 (`evals/prompts/jiwon_llama_v3.md`) over
-`labeling_batch_gold300.csv` on Kaggle, re-score, and only relabel all 8,360
-rows if the criteria clear.
+`labeling_batch_gold300.csv` on Kaggle — upload `pipeline/kaggle_llama_labeling.ipynb`,
+attach the CSV as a private dataset, Run All — then re-score locally with
+`pipeline.quality_gate` and only relabel all 8,360 rows if the criteria clear.
 
 <details><summary>Original task description</summary>
 
@@ -133,6 +134,20 @@ serving:
 ⚠️ Both predicates must move into `eligibility` **before Stage 3 serving
 ships**. Filtering only at training time while serving keeps scoring those rows
 creates exactly the train/serve skew the shared filter exists to prevent.
+
+### 3b. Relabel the corpus with the champion — in progress
+
+Prompt v3 won on kappa (0.650) and macro-F1 (0.808) over v2 and v4, and took
+the analyst-attribution mislabels from 21 to 0. It is **below two acceptance
+criteria** (`negative` recall 0.714, `positive` recall 0.676) and is used
+anyway — see `scoring/DESIGN.md` § "Training on a champion that missed the
+criteria". Short version: v3 fails on recall, which withholds signal and is
+partly recoverable by tuning the serving threshold on `item_score.probs`;
+v2 failed on precision, which teaches a wrong rule that no threshold undoes.
+
+Run `pipeline/kaggle_llama_labeling.ipynb` over all 8,360 rows with
+`jiwon_llama_v3.md`, then re-run `export_training_set` on the new labels
+before training.
 
 ### 4. Fine-tune FinBERT — scripts ✔, run still blocked on the relabel
 

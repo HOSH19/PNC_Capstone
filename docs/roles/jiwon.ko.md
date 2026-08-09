@@ -66,8 +66,10 @@ Stage 2는 Stage 1에 틀리기 쉬운 방식으로 걸려 있다: 학습셋은 
   프롬프트는 dev에만 맞춰 수정할 것.
 
 다음: Kaggle에서 프롬프트 v3(`evals/prompts/jiwon_llama_v3.md`)를
-`labeling_batch_gold300.csv`에 돌리고 재채점한 뒤, 기준을 통과할 때만 8,360행
-전량을 재라벨한다.
+`labeling_batch_gold300.csv`에 돌린다 — `pipeline/kaggle_llama_labeling.ipynb`를
+업로드하고, CSV를 private 데이터셋으로 붙인 뒤 Run All. 결과를 로컬에서
+`pipeline.quality_gate`로 재채점하고, 기준을 통과할 때만 8,360행 전량을
+재라벨한다.
 
 <details><summary>원래 태스크 설명</summary>
 
@@ -128,6 +130,19 @@ Stage 2는 Stage 1에 틀리기 쉬운 방식으로 걸려 있다: 학습셋은 
 ⚠️ 두 술어 모두 **Stage 3 서빙이 나가기 전에** `eligibility`로 옮겨야 한다.
 학습에서만 걸러내고 서빙은 계속 채점하면, 공유 필터가 막으려는 바로 그
 train/serve skew가 생긴다.
+
+### 3b. champion으로 코퍼스 재라벨 — 진행 중
+
+프롬프트 v3가 kappa(0.650)와 macro-F1(0.808)에서 v2·v4를 앞섰고, 애널리스트
+귀속 오라벨을 21건에서 0건으로 만들었다. **판정 기준 2개 아래**이지만
+(`negative` recall 0.714, `positive` recall 0.676) 그대로 쓴다 —
+`scoring/DESIGN.md` § "기준을 통과하지 못한 champion으로 학습하는 결정" 참조.
+요약하면, v3는 recall에서 떨어져 신호를 덜 넣는 것이고 `item_score.probs`로
+서빙 임계값을 조정해 부분 회복이 가능한 반면, v2는 정밀도에서 떨어져 틀린
+규칙을 가르치며 그건 어떤 임계값으로도 되돌릴 수 없다.
+
+`pipeline/kaggle_llama_labeling.ipynb`로 8,360행 전량을 `jiwon_llama_v3.md`로
+돌린 뒤, 새 라벨로 `export_training_set`을 다시 실행하고 학습에 들어간다.
 
 ### 4. FinBERT 파인튜닝 — 스크립트 ✔, 실행은 재라벨링에 막혀 있음
 

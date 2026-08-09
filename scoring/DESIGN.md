@@ -43,6 +43,8 @@ no effect on the labeling batch or on verification work in flight.
 | 2026-08-07 | **Gold rows are split dev / holdout** (`quality_gate.stratum_for`); prompts are tuned against dev only, and holdout rows are excluded from the FinBERT training set. Slice 6 is halved by file order rather than assigned whole. | Otherwise the human rows scatter into train/val by publication date and no human-truth evaluation survives — measured, 168 of 300 went to train. Slice 6 is the directional oversample, so assigning it whole to dev left the holdout with 3 `negative` rows; halving by file order keeps both sides usable and cannot be re-cut favourably later. The holdout is **semi-blind**: the gate report lists every disagreeing row. |
 | 2026-08-07 | **Relabel before training, and pilot the relabel on the 300 gold rows before running all 8,360.** | Training first cannot answer whether relabeling is needed: validation labels come from the same labeler, so a high `negative` F1 would mean the model reproduced the error faithfully, and a low one confounds label noise with class scarcity (186 rows) and FinBERT's tone prior. The pilot costs ~2 min of GPU and no human time, because the 300 human labels already exist and `quality_gate.py` scores the result immediately. |
 | 2026-08-07 | **Prompt v3** (`evals/prompts/jiwon_llama_v3.md`) leads with a subject test, closes `negative`'s open-ended euphemism clause, and rebalances the examples to neutral 9 / negative 6 / positive 3. v2 is kept as the provenance of `labels_2026-07-22.csv`. | v2 opened with "news articles about US banks", which asserted the premise the labeler most often got wrong — only 9.4% of GDELT titles name their own bank, and 13 of 25 dev disagreements are bank-as-analyst rows. "US" also contradicted the labeling guide. The examples are the real lever: `max_tokens=4` with guided choice means step-by-step instructions cannot execute as reasoning, and v2's negative-heavy example set was itself pushing the negative prior. |
+| 2026-08-09 | **Prompt v3 is the champion**, chosen over v2 and v4 on kappa (0.650 vs 0.564 / 0.601) and macro-F1 (0.808 vs 0.700 / 0.766). Prompt iteration stops here, at the pre-agreed v4 cap. **v3 does not meet the acceptance criteria** — `negative` recall 0.714 (bar 0.85) and `positive` recall 0.676 (bar 0.70) — so this is a documented deviation, not a pass, and the write-up must say so. | v3 fixed what the gate was opened for: `negative` precision 0.361 → 1.000, and the 21 analyst-attribution mislabels went to **zero**. That is the defect that poisons the training set, and no later run beat it. v4 traded it away — it lifted `negative` recall 0.714 → 0.786 but drove `positive` recall 0.765 → 0.353 and moved the whole distribution toward the all-`neutral` degenerate labeler (274 predicted `neutral` against 252 actual), which is why its raw agreement rose to 95.2% while kappa *fell*. The remaining options are the Gemini challenger or two-stage decoding, both deferred; re-open this if either is taken up. |
+| 2026-08-09 | **`positive recall` added to the criteria table** (`quality_gate.CRITERIA`), after the v4 run exposed that it was missing. | Every directional precision was supposed to be paired with its recall; `positive` shipped unpaired, and v4 walked through the gap — passing `positive precision` at 0.857 precisely *because* it had almost stopped predicting `positive` (43 → 14 predictions, recall 0.353). Four of five criteria read green while the failure migrated from one class to another. The threshold (0.70) is rounded down from the v2 baseline that set the rest of the table, not fitted to any run: the champion is below it. A test now asserts that no directional precision ships without its recall. Changing the table after seeing a result is exactly what the fixed-in-advance rule forbids, so it is recorded here as closing a hole rather than moving a bar — no existing threshold was touched. |
 | 2026-08-07 | **The prompt file is the only source of its own version**; `kaggle_llama_labeling.py` reads the `<!-- prompt_version -->` marker and validates it before the GPU work. | The driver previously carried a `PROMPT_VERSION` constant beside a marker in the prompt file, so pointing it at a v3 file would have written `"v2"` into `model_meta` — a provenance field that lies is worse than no field. |
 
 ## Shared contract (the only cross-team surface)
@@ -250,6 +252,47 @@ fine-tuned by `pipeline/kaggle_finbert_train.py` (GPU glue only).
   FinBERT as the baseline to demonstrate the fine-tune helped.
 - Class weights are inverse-frequency: the corpus is ~90% `neutral` while the
   distress index depends on the rare directional classes.
+
+### Training on a champion that missed the criteria (decided 2026-08-09)
+
+v3 is the champion and is **below two of the acceptance criteria** —
+`negative` recall 0.714 against a 0.85 bar, `positive` recall 0.676 against
+0.70. Training proceeds anyway. The reasoning, because a reader is entitled to
+ask why a bar was set and then not met:
+
+**Which criterion failed matters more than how many.** v2 failed on
+*precision*: it labeled analyst rows about other companies `negative`, so
+training on it teaches the rule "an analyst downgrade is bank distress", and
+that rule then fires across the whole corpus and manufactures signal. v3 fails
+on *recall*: the rows it misses land in `neutral`. That withholds signal
+rather than inventing it — the "random noise is tolerable, systematic bias is
+not" distinction this document draws at the gate. v3 fixed the bias: the 21
+analyst-attribution mislabels went to zero.
+
+**And one of the two is recoverable downstream.** `item_score.probs` stores
+the 3-class distribution, so a model that under-calls direction can have its
+directional threshold lowered at serving — trading precision back for recall
+without retraining. A precision defect could not be undone that way: the wrong
+rule is in the weights. The choice was therefore between a fixable failure and
+an unfixable one.
+
+Three things follow, and none are optional:
+
+1. **The recall ceiling is inherited, not incidental.** FinBERT distills the
+   stage-1 labels, so it cannot exceed v3 on the rows v3 gets wrong. The index
+   will under-react to real distress. Say this in the write-up; do not report
+   the model's recall as if the labeler were ground truth.
+2. **Serving must not hard-code `argmax`.** Keep `probs` populated and leave
+   the directional threshold tunable — that is the mitigation this decision
+   depends on.
+3. **The backtest is the real gate.** If `evals/backtest.py` shows the index
+   missing known distress events, the fix is upstream at the labeler, and the
+   remaining options are the Gemini challenger or two-stage decoding.
+
+v3's misses are not uniformly random either — they cluster on "the bank is the
+target of an analyst action", multi-bank sector stories, and results that beat
+while the shares fell. Threshold tuning recovers such rows only partly, which
+is why (3) is a real gate and not a formality.
 - Artifact: model weights versioned outside the repo (Kaggle dataset or HF
   hub, TBD); `item_score.model_version` records which weights scored each row.
 
