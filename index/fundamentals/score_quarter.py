@@ -253,6 +253,7 @@ def main() -> int:
         f"| frozen {params['frozen_as_of']} | {len(sample):,} training rows")
 
     started, ok = time.monotonic(), False
+    n_seen = n_written = 0
     conn = None
     try:
         if args.from_parquet:
@@ -265,6 +266,7 @@ def main() -> int:
         if raw.empty:
             log("no input rows — nothing to score")
             return 1
+        n_seen = len(raw)
         log(f"scoring {len(raw):,} rows over "
             f"{raw.report_date.astype(str).nunique()} quarter(s)")
 
@@ -324,15 +326,15 @@ def main() -> int:
                 "you are deliberately rebuilding.")
         if conn is None:
             conn = db.connect()
-        n = upsert_scores(conn, out)
+        n_written = upsert_scores(conn, out)
         conn.commit()
-        log(f"wrote {n:,} rows to bank_index_score")
+        log(f"wrote {n_written:,} rows to bank_index_score")
         ok = True
     finally:
         if conn:
             try:
                 conn.rollback()
-                db.write_heartbeat(conn, JOB, len(sample), 0 if args.dry_run else 1,
+                db.write_heartbeat(conn, JOB, n_seen, n_written,
                                    time.monotonic() - started, ok)
             except Exception as e:
                 log(f"WARN heartbeat not written: {type(e).__name__}: {e}")

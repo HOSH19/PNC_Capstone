@@ -5,8 +5,10 @@
 carrying the value the model actually saw.
 
 **The values are the model's, not fact_call_report's.** 012 is explicit about
-this — "values are the ones the MODEL saw (post winsorize/impute), so they can
-differ slightly from raw fact_call_report; that is intentional". So a row here
+this: the values are the ones the model saw, so they can differ from raw
+fact_call_report, and that is intentional. (012 says "post winsorize/impute";
+there is no winsorization anywhere in this pipeline, only median imputation.)
+So a row here
 is `raw_field / total_assets`, the same transform score_quarter.py applies,
 rather than a conventional regulatory ratio. `RCRI_P742` is common equity tier 1
 over total assets, which is not the tier 1 capital ratio anyone quotes (that one
@@ -83,7 +85,9 @@ def display_names() -> dict:
     """
     out = {}
     for line in FEATURES_MD.read_text().split("\n"):
-        m = re.match(r"^\| (\d+) \| `([\w]+)` \| (.*?) \| (.*?) \|$", line)
+        # [^|] rather than . — an added column would otherwise be absorbed into
+        # the reading and still parse, giving 50 rows of quietly wrong text.
+        m = re.match(r"^\| (\d+) \| `([\w]+)` \| ([^|]*?) \| ([^|]*?) \|$", line)
         if m:
             rank, code, _, reading = m.groups()
             out[code] = f"#{int(rank):02d} {reading}"
@@ -108,6 +112,10 @@ def from_panel(params, seeds) -> pd.DataFrame:
     feats = params["features"]
     d = pd.read_parquet(path, columns=["IDRSSD", "quarter"] + feats)
     d = d[d.IDRSSD.isin(seeds) & (d.quarter >= SCORE_FROM) & (d.quarter < PANEL_UNTIL)]
+    if d.empty:
+        raise SystemExit(
+            f"no tracked banks in {path} between {SCORE_FROM} and {PANEL_UNTIL}. "
+            "Check db/seed/banks.csv and the panel's quarter range.")
     log(f"panel    {len(d):,} bank-quarters  {d.quarter.min()[:6]}~{d.quarter.max()[:6]}")
     return d
 
@@ -115,7 +123,10 @@ def from_panel(params, seeds) -> pd.DataFrame:
 def from_table(params, seeds, conn) -> pd.DataFrame:
     """Recent quarters, transformed here with the same recipe score_quarter uses
     — imported rather than reimplemented, so the two cannot drift."""
-    cols = "rssd_id, report_date, " + ", ".join(
+    # fdic_cert_number comes from the table, which resolved it at ingest — 014
+    # carries it for exactly this. Re-deriving it from the static CSV would be a
+    # second path that can diverge from the one bank_index_score used.
+    cols = "rssd_id, report_date, fdic_cert_number, " + ", ".join(
         f.lower() for f in params["raw_fields"])
     with conn.cursor() as cur:
         cur.execute(f"SELECT {cols} FROM index_model_input WHERE report_date >= %s",
@@ -125,7 +136,7 @@ def from_table(params, seeds, conn) -> pd.DataFrame:
         log("table    no rows at or after the panel's end")
         return pd.DataFrame()
     for c in raw.columns:
-        if c not in ("rssd_id", "report_date"):
+        if c not in ("rssd_id", "report_date", "fdic_cert_number"):
             raw[c] = pd.to_numeric(raw[c], errors="coerce")
     raw = raw[raw.rssd_id.isin(seeds)]
     # Before imputation, so NaN still marks what was missing. transform() fills
@@ -137,6 +148,7 @@ def from_table(params, seeds, conn) -> pd.DataFrame:
     post[pre.isna()] = np.nan          # re-open the gaps transform filled
     post["IDRSSD"] = raw.rssd_id.values
     post["quarter"] = pd.to_datetime(raw.report_date).dt.strftime("%Y%m%d").values
+    post["cert"] = raw.fdic_cert_number.values
     log(f"table    {len(post):,} bank-quarters  "
         f"{post.quarter.min()[:6]}~{post.quarter.max()[:6]}")
     return post
@@ -144,7 +156,8 @@ def from_table(params, seeds, conn) -> pd.DataFrame:
 
 def melt(d: pd.DataFrame, params, names, certs, ids) -> pd.DataFrame:
     feats = params["features"]
-    m = d.melt(id_vars=["IDRSSD", "quarter"], value_vars=feats,
+    keys = ["IDRSSD", "quarter"] + (["cert"] if "cert" in d.columns else [])
+    m = d.melt(id_vars=keys, value_vars=feats,
                var_name="feature_name", value_name="value")
     m["is_imputed"] = m.value.isna()
     # The model never sees NaN — it imputes with the frozen median, so that is
@@ -153,8 +166,11 @@ def melt(d: pd.DataFrame, params, names, certs, ids) -> pd.DataFrame:
     med = pd.Series(params["medians"])
     m["value"] = m.value.fillna(m.feature_name.map(med))
     m["display_name"] = m.feature_name.map(names)
-    m["fdic_cert_number"] = [certs.get((int(r), q))
-                             for r, q in zip(m.IDRSSD, m.quarter)]
+    # The table half already carries the certificate 014 resolved; only the
+    # panel half, which predates that table, needs the lookup.
+    looked_up = [certs.get((int(r), q)) for r, q in zip(m.IDRSSD, m.quarter)]
+    m["fdic_cert_number"] = (m.cert.fillna(pd.Series(looked_up, index=m.index))
+                             if "cert" in m.columns else looked_up)
     m["quarter_end_date"] = pd.to_datetime(m.quarter, format="%Y%m%d").dt.date
     m["threshold_text"] = None
     m["status"] = None
@@ -163,6 +179,7 @@ def melt(d: pd.DataFrame, params, names, certs, ids) -> pd.DataFrame:
         log(f"  {dropped:,} rows have no certificate — dropped")
         m = m[m.fdic_cert_number.notna()]
     m["value"] = m.value.astype("float32")
+    m["fdic_cert_number"] = m.fdic_cert_number.astype("int64")
     return m[COLS].sort_values(["quarter_end_date", "fdic_cert_number", "feature_name"])
 
 
@@ -193,7 +210,14 @@ def main() -> int:
     seeds = set(ids)
     log(f"{len(params['features'])} features x {len(seeds)} tracked banks")
 
+    if args.load and not os.environ.get("SUPABASE_DB_URL"):
+        raise SystemExit("--load needs SUPABASE_DB_URL; without it the run would "
+                         "overwrite the artefact and then fail")
     conn = db.connect() if os.environ.get("SUPABASE_DB_URL") else None
+    # Before the try, not just before load(): the finally block reads them, and a
+    # failure in from_panel or melt would otherwise raise UnboundLocalError there
+    # and lose the heartbeat for exactly the failures worth recording.
+    started, ok, n = time.monotonic(), False, 0
     try:
         parts = [from_panel(params, seeds)]
         if conn is not None:
@@ -208,7 +232,9 @@ def main() -> int:
         d.to_parquet(out_path, index=False)
         log(f"\n{len(d):,} rows -> {out_path} "
             f"({out_path.stat().st_size / 1e6:.1f} MB)")
-        log(f"  {d.fdic_cert_number.nunique()} banks x "
+        # certificates, not banks: one tracked bank changed its FDIC certificate
+        # mid-history, so the two counts differ by one.
+        log(f"  {len(ids)} banks / {d.fdic_cert_number.nunique()} certificates x "
             f"{d.quarter_end_date.nunique()} quarters x "
             f"{d.feature_name.nunique()} features")
         log(f"  imputed {d.is_imputed.mean():.2%} of values")
@@ -216,7 +242,6 @@ def main() -> int:
             log("\nnot loaded — pass --load to write bank_index_feature")
             return 0
 
-        started, ok = time.monotonic(), False
         n = load(conn, d)
         log(f"loaded {n:,} rows into bank_index_feature")
         ok = True
@@ -225,7 +250,7 @@ def main() -> int:
             try:
                 conn.rollback()
                 if args.load:
-                    db.write_heartbeat(conn, JOB, len(seeds), 1 if ok else 0,
+                    db.write_heartbeat(conn, JOB, len(d), n,
                                        time.monotonic() - started, ok)
             except Exception as e:
                 log(f"WARN heartbeat not written: {type(e).__name__}: {e}")
