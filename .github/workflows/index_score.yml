@@ -53,12 +53,15 @@ jobs:
       # scope — anyone who can dispatch the workflow could read SUPABASE_DB_URL.
       # actionlint does not flag this: it treats workflow_dispatch inputs as
       # trusted.
+      # --seed-only: the collector pulls every filer, but bank_index_score
+      # publishes the tracked banks. Without it each quarterly run would widen
+      # the table's population and break any aggregate over it.
       - name: Score it into bank_index_score
         env:
           QUARTER: ${{ github.event.inputs.quarter }}
         run: |
           if [ -n "$QUARTER" ]; then
-            python index/fundamentals/score_quarter.py --quarter "$QUARTER"
+            python index/fundamentals/score_quarter.py --seed-only --quarter "$QUARTER"
           else
-            python index/fundamentals/score_quarter.py
+            python index/fundamentals/score_quarter.py --seed-only
           fi

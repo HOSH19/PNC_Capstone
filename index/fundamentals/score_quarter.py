@@ -238,6 +238,8 @@ def main() -> int:
     ap.add_argument("--from-parquet", help="read inputs from a parquet instead of the DB")
     ap.add_argument("--force-in-sample", action="store_true",
                     help="allow writing quarters the model trained on (see the guard)")
+    ap.add_argument("--seed-only", action="store_true",
+                    help="write only the tracked banks (those with a bank_id)")
     args = ap.parse_args()
     if args.all and args.quarter:
         raise SystemExit("--all and --quarter are mutually exclusive")
@@ -270,6 +272,22 @@ def main() -> int:
         scaler, gp = build_model(params, sample)
         log(f"GP refitted in {time.monotonic() - t0:.0f}s")
         out = score_rows(raw, params, scaler, gp)
+
+        # The scorer sees whatever the collector pulled, which is every filer —
+        # it has no notion of which banks are ours. bank_index_score is published
+        # for the tracked banks only, and mixing the two scopes across quarters
+        # is worse than either: anyone aggregating over the table would see the
+        # population jump from 104 to ~4,400 mid-series and read it as a change
+        # in the data. The full-sample scores live in the committed backfill
+        # parquet, not in the table.
+        if args.seed_only:
+            n0 = len(out)
+            out = out[out.bank_id.notna()]
+            log(f"seed-only: {n0:,} scored -> {len(out):,} tracked banks kept")
+            if out.empty:
+                log("no tracked banks in this quarter — nothing to write")
+                ok = True
+                return 0
 
         bands = dict(out.band.value_counts())
         log(f"  bands  {bands}")

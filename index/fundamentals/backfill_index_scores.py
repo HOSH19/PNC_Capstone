@@ -212,6 +212,8 @@ def main() -> int:
     ap.add_argument("--load", action="store_true",
                     help="also write the rows into bank_index_score")
     ap.add_argument("--out", help="where to write the parquet")
+    ap.add_argument("--seed-only", action="store_true",
+                    help="load only the tracked banks; the parquet stays full either way")
     args = ap.parse_args()
     out_path = pathlib.Path(args.out) if args.out else ARTEFACT
 
@@ -231,6 +233,13 @@ def main() -> int:
     if not args.load:
         log("\nnot loaded — pass --load to write bank_index_score")
         return 0
+
+    # The artefact is always the full sample — it is the backup, and regenerating
+    # it costs a rebuilt panel. What goes into the table is a separate choice.
+    if args.seed_only:
+        n0 = len(d)
+        d = d[d.bank_id.notna()]
+        log(f"seed-only: loading {len(d):,} of {n0:,} rows (tracked banks)")
     if not os.environ.get("SUPABASE_DB_URL"):
         raise SystemExit("SUPABASE_DB_URL is not set")
 
