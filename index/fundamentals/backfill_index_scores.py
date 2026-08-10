@@ -15,19 +15,16 @@ are what was genuinely knowable at the time:
 
     2017Q1-2019Q3   no rows. Those quarters were only ever training data for the
                     first fold, so nothing honest exists for them.
-    2019Q4-2024Q1   out-of-fold predictions, model_version gp50_oos_v1
-    2024Q2 onward   the production model, model_version gp50_prod_v1
+    2019Q4-2025Q1   out-of-fold predictions, model_version gp50_oos_v1
+    2025Q2 onward   the production model, model_version gp50_prod_v1
 
 `model_version` is what tells the two apart; 012 already carries it, so no schema
 change is needed and a consumer can always see which model produced a row.
 
-The two are mapped through the *same* Platt calibration and score anchors, so the
-seam is small. Over 2024Q2-2025Q1, where both are out-of-sample and can be compared
-on the same rows, production minus out-of-fold has a median of -0.06 points on a
-0-100 scale, and the band shares differ by less than half a point (sound 70.00% vs
-69.65%, distress 10.00% vs 10.63%). Per bank the two still disagree: 15.9% of rows
-are more than 5 points apart and bands agree on 83.7%. That is the ordinary spread
-between two models fitted on different amounts of data, not a boundary artefact.
+Both are mapped through the same Platt calibration and score anchors. Pooled over
+every filer the two agree closely — median difference -0.06 points on a 0-100
+scale — but that average hides the disagreement on the largest banks, which is
+what PROD_FROM below is about.
 
     python index/fundamentals/backfill_index_scores.py            # write the file
     python index/fundamentals/backfill_index_scores.py --load     # and load it
@@ -59,9 +56,21 @@ FROZEN = HERE / "frozen_params.json"
 ARTEFACT = pathlib.Path(os.environ.get(
     "BACKFILL_OUT", ROOT / "index" / "data" / "bank_index_score_backfill.parquet"))
 CALL_FACT = ROOT / "unified_ffiec_fdic_dataset" / "tables" / "fact_call_report.csv"
-# The first report quarter the production model did not train on. Everything
-# earlier is in-sample for it and must come from the folds instead.
-PROD_FROM = "20240401"
+# Where the published series switches from the fold models to the production
+# model. Not the earliest quarter the production model *could* honestly score
+# (that is 2024Q2, the first it did not train on) but the end of the walk-forward,
+# so the whole history comes from one consistent source and the handover lands at
+# the present rather than inside the chart.
+#
+# The two models disagree by more than rounding on the largest banks, which are
+# barely represented in a 5,000-row training sample. Over 2019Q4-2025Q1 the
+# production model puts 1-6 of the 104 tracked banks in the distress band each
+# quarter where the folds put 0-2 — consistently, in every quarter, both models
+# scoring the same filings. Splicing at 2024Q2 therefore drew a step in the middle
+# of the series: 0 distressed banks in 2024Q1, 6 in 2024Q2, none of which was a
+# change in any bank. Splicing at the end leaves one handover, at the edge, where
+# "this is what the current model says" is the natural reading.
+PROD_FROM = "20250401"
 OOS_MODEL = "gp50_oos_v1"
 JOB = "index_backfill"
 
@@ -134,16 +143,21 @@ def assemble(params) -> pd.DataFrame:
 
     log(f"history  {len(hist):,} rows  {span(hist)}  ({OOS_MODEL})")
     log(f"current  {len(cur):,} rows  {span(cur)}  ({params['model_version']})")
-    if hist.empty or cur.empty:
+    # An empty current half is the normal state: PROD_FROM sits at the end of the
+    # walk-forward, so the production model has nothing to contribute until the
+    # first quarterly run. An empty history is not — it means the backfill would
+    # publish nothing.
+    if hist.empty:
         raise SystemExit(
-            f"one half of the splice is empty (history {len(hist):,}, "
-            f"current {len(cur):,}). PROD_FROM is {PROD_FROM}; check that "
-            f"{OUT}/oos_predictions.parquet and scores.parquet are from the same run.")
+            f"no history before {PROD_FROM} in {OUT}/oos_predictions.parquet. "
+            "Check that it and scores.parquet are from the same run of models.py.")
 
     frames = []
     for src, prob, lv, version in (
             (hist, hist[pcol].values, hist[lcol].values, OOS_MODEL),
             (cur, cur.prob_raw.values, cur.latent_var.values, params["model_version"])):
+        if src.empty:
+            continue
         f = pd.DataFrame({"rssd_id": src.IDRSSD.values, "quarter": src.quarter.values})
         for k, v in publish(prob, lv, params).items():
             f[k] = v
