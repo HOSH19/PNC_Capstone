@@ -23,12 +23,16 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from pipeline import db
+from pipeline.http import RetriesExhausted
 from pipeline.poll_gdelt import fetch_window, to_rows
 
-# calibration: the sizing probe hit 429s on 2 of 6 banks at the poller's 8 s
-# spacing and succeeded immediately at 25 s. A backfill runs thousands of
-# requests back to back, so it sustains the pressure the poller never does.
-# Lower this only with a fresh probe.
+# calibration: the sizing probe hit 429s at the poller's old 8 s spacing and
+# succeeded at 25 s, but GDELT has since got stricter — see poll_gdelt's own
+# note. 25 s has never been cleanly tested against the current API alone, so
+# treat this as the starting guess and override it with --throttle-s rather
+# than editing the file. Spacing multiplies the whole run here (thousands of
+# requests, unlike the poller's ~104), so the minimum that works is worth
+# finding, but only from a run that had GDELT to itself.
 THROTTLE_S = 25.0
 
 # One request covers a quarter unless it overflows 250 rows, in which case
@@ -95,7 +99,12 @@ def resume_start(
 
 
 def backfill_bank(
-    conn, bank: dict, start: datetime, end: datetime, deadline: float
+    conn,
+    bank: dict,
+    start: datetime,
+    end: datetime,
+    deadline: float,
+    throttle_s: float = THROTTLE_S,
 ) -> tuple[int, int, bool]:
     """Walk one bank's windows. Returns (seen, inserted, finished)."""
     seen = inserted = 0
@@ -108,7 +117,7 @@ def backfill_bank(
         if time.monotonic() > deadline:
             return seen, inserted, False
         articles = fetch_window(
-            bank["gdelt_query"], window_start, window_end, THROTTLE_S
+            bank["gdelt_query"], window_start, window_end, throttle_s
         )
         rows = to_rows(bank["bank_id"], articles)
         # Windows are disjoint, but a syndicated story can straddle a window
@@ -142,6 +151,12 @@ def main(argv: list[str] | None = None) -> None:
         default=DEFAULT_BUDGET_MIN,
         help="stop on a window boundary after this many minutes",
     )
+    ap.add_argument(
+        "--throttle-s",
+        type=float,
+        default=THROTTLE_S,
+        help="seconds between GDELT requests; raise it if the run 429s",
+    )
     args = ap.parse_args(argv)
     index, total = (int(x) for x in args.bank_slice.split("/"))
     if args.start >= args.end:
@@ -158,7 +173,7 @@ def main(argv: list[str] | None = None) -> None:
         for bank in bank_slice(banks, index, total):
             try:
                 b_seen, b_inserted, finished = backfill_bank(
-                    conn, bank, args.start, args.end, deadline
+                    conn, bank, args.start, args.end, deadline, args.throttle_s
                 )
                 seen += b_seen
                 inserted += b_inserted
@@ -168,6 +183,15 @@ def main(argv: list[str] | None = None) -> None:
                     f"{bank['bank_id']}: {b_seen} seen, {b_inserted} inserted"
                     f"{'' if finished else ' (out of time)'}"
                 )
+            except RetriesExhausted as exc:
+                # Being rate-limited is "come back later", which is what
+                # `incomplete` already means: the watermark stayed put, so the
+                # next run redoes these windows. Failing the job for it would
+                # paint every pass red on the one condition the resume design
+                # exists to absorb.
+                conn.rollback()
+                incomplete.append(bank["bank_id"])
+                print(f"{bank['bank_id']}: rate-limited, will resume: {exc}")
             except Exception as exc:
                 # Same isolation as the poller: one bad query or API failure
                 # must not starve the banks after it. Its backfill watermark

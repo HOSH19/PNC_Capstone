@@ -23,7 +23,15 @@ from pipeline.http import throttled_get
 
 API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 MAX_RECORDS = 250
-THROTTLE_S = 8.0
+# calibration: 8 s stopped working. Every scheduled run from 2026-08-11 on
+# failed, 35 x 429 in the last one, banks dying on exhausted retries and the
+# job stretching to 3 h on backoff alone — with nothing else of ours calling
+# GDELT at the time, so this is the API getting stricter, not contention.
+# 60 s is deliberately generous rather than the minimum that might work: the
+# poller makes ~104 requests per run against a 6-hourly schedule, so even at
+# this spacing it finishes in under two hours, and recovering the live feed
+# matters more than finishing quickly. Lower it only against a clean probe.
+THROTTLE_S = 60.0
 OVERLAP = timedelta(minutes=15)
 FIRST_RUN_LOOKBACK = timedelta(hours=72)
 MIN_WINDOW = timedelta(minutes=1)  # bisect guard

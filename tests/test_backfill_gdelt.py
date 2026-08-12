@@ -65,8 +65,29 @@ def test_backfill_watermark_does_not_collide_with_the_live_poller():
     assert row["source"] == "gdelt"  # rows still land in the one gdelt source
 
 
-def test_request_spacing_is_the_calibrated_25s():
+def test_request_spacing_stays_above_the_rate_that_429s():
+    """8 s is measured to fail: every scheduled poll from 2026-08-11 died on
+    429 at that spacing. Neither caller may drift back down to it.
+
+    The two are set independently on purpose — the poller makes ~104 requests
+    per run and can afford to be slow, while spacing multiplies the backfill's
+    thousands — so this pins the floor, not the values.
+    """
     from pipeline import poll_gdelt
 
-    assert bf.THROTTLE_S == 25.0
-    assert poll_gdelt.THROTTLE_S == 8.0  # the live poller is unchanged
+    KNOWN_TOO_FAST = 8.0
+    assert bf.THROTTLE_S > KNOWN_TOO_FAST
+    assert poll_gdelt.THROTTLE_S > KNOWN_TOO_FAST
+
+
+def test_rate_limit_is_incomplete_not_failure():
+    """Being 429'd is the one condition the resume design exists to absorb.
+
+    Treating it as a failure paints every pass red on the exact signal that
+    means "come back later", which is what `incomplete` already reports.
+    """
+    from pipeline.http import RetriesExhausted
+
+    assert issubclass(RetriesExhausted, RuntimeError)  # old callers unaffected
+    exc = RetriesExhausted("GDELT still failing after 5 retries: 429", status=429)
+    assert exc.status == 429
