@@ -36,7 +36,20 @@ jobs:
       fail-fast: false
       matrix:
         # New pollers: add the module name here — one line. RUNBOOK.md §6.
-        module: [poll_gdelt, poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_agency_rss]
+        #
+        # ⚠️ poll_gdelt is PAUSED as of 2026-08-12, and must be put back.
+        #
+        # Why: the 2020-2024 backfill needs GDELT to itself. The two competing
+        # produced 429s on both, and nothing consumes live GDELT yet (no
+        # serving, no dashboard), so the backfill goes first.
+        #
+        # RESTORE by putting poll_gdelt back in the list below, as soon as the
+        # backfill stops reporting `incomplete`. This is not free to forget:
+        # the poller resumes from its own watermark, so a short pause is
+        # caught up automatically, but GDELT's artlist API only serves a
+        # limited recent window — a pause left running for weeks loses those
+        # articles permanently, and nothing here will warn you.
+        module: [poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_agency_rss]
     steps:
       - uses: actions/checkout@v4
 

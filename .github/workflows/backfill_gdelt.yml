@@ -26,12 +26,15 @@ name: backfill_gdelt
 # the log stops saying "incomplete" is the intended operating procedure.
 
 on:
-  # 03/09/15/21 UTC — the midpoint between ingest.yml's 00/06/12/18 polls, so
-  # the backfill never shares GDELT with the live poller. That matters: on
-  # 2026-08-12 a manual backfill overlapped a 3 h poll run and both 429'd.
-  # 150 minutes ends each pass at :30, well clear of the next poll.
+  # Every 6 h at full budget. This used to be offset to 03/09/15/21 to dodge
+  # ingest.yml's polls, but poll_gdelt is paused for the duration (see the
+  # note in that file), so there is nothing left to share GDELT with and the
+  # backfill takes the whole window. 300 min against a 360 min job cap.
+  #
+  # When poll_gdelt goes back, this must go back to the offset schedule and a
+  # 150 min budget, or the two will 429 each other again.
   schedule:
-    - cron: "0 3,9,15,21 * * *"
+    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       start:
@@ -42,7 +45,7 @@ on:
         default: "2025-01-01"
       budget_min:
         description: "stop cleanly after this many minutes (Actions caps at 360)"
-        default: "150"
+        default: "300"
       throttle_s:
         description: "seconds between GDELT requests"
         default: "25"
@@ -53,7 +56,10 @@ env:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 170
+    # Above --budget-min, so the script stops itself on a window boundary with
+    # its watermark committed rather than being killed mid-window. Actions
+    # caps a job at 360.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
