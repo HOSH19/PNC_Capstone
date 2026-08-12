@@ -1,0 +1,59 @@
+name: backfill_gdelt
+
+# One-off historical backfill (docs/roles/jiwon.md §5), NOT a poller: the
+# live 6-hourly matrix in ingest.yml stays untouched. Manual trigger only.
+#
+# Sizing: ~104 banks x ~21 quarterly windows = ~2.1k requests at 25 s
+# spacing = ~15 h of wall clock. Actions kills a job at 6 h, so the banks are
+# split across 4 parallel slices (~3.8 h of work each, 5 h of budget) and
+# each job stops itself at --budget-min with its watermarks committed.
+# Re-running this workflow with the same inputs resumes; finished banks cost
+# zero requests, so a second pass mops up whatever the first pass ran out of
+# time for.
+#
+# The 25 s spacing is per process, so 4 parallel runners are 4 independent
+# IPs pacing themselves separately. If GDELT starts 429ing anyway, drop
+# max-parallel to 1 and raise the run count instead of lowering the spacing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "first day, inclusive"
+        default: "2020-01-01"
+      end:
+        description: "last day, exclusive"
+        default: "2025-01-01"
+      budget_min:
+        description: "stop cleanly after this many minutes (Actions caps at 360)"
+        default: "300"
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Backfill slice ${{ matrix.slice }}/4
+        run: |
+          python -m pipeline.backfill_gdelt \
+            --start "${{ inputs.start }}" \
+            --end "${{ inputs.end }}" \
+            --budget-min "${{ inputs.budget_min }}" \
+            --bank-slice "${{ matrix.slice }}/4"
