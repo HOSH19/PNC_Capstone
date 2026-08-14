@@ -23,7 +23,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from pipeline import db
-from pipeline.http import RetriesExhausted
+from pipeline.http import Transient
 from pipeline.poll_gdelt import fetch_window, to_rows
 
 # calibration: the sizing probe hit 429s at the poller's old 8 s spacing and
@@ -33,7 +33,7 @@ from pipeline.poll_gdelt import fetch_window, to_rows
 # than editing the file. Spacing multiplies the whole run here (thousands of
 # requests, unlike the poller's ~104), so the minimum that works is worth
 # finding, but only from a run that had GDELT to itself.
-THROTTLE_S = 25.0
+THROTTLE_S = 60.0
 
 # One request covers a quarter unless it overflows 250 rows, in which case
 # fetch_window bisects. ~20 windows x 104 banks ~= 2.1k requests ~= 15 h at
@@ -183,15 +183,16 @@ def main(argv: list[str] | None = None) -> None:
                     f"{bank['bank_id']}: {b_seen} seen, {b_inserted} inserted"
                     f"{'' if finished else ' (out of time)'}"
                 )
-            except RetriesExhausted as exc:
-                # Being rate-limited is "come back later", which is what
+            except Transient as exc:
+                # Rate limits and truncated payloads both mean "come back
+                # later", which is what
                 # `incomplete` already means: the watermark stayed put, so the
                 # next run redoes these windows. Failing the job for it would
                 # paint every pass red on the one condition the resume design
                 # exists to absorb.
                 conn.rollback()
                 incomplete.append(bank["bank_id"])
-                print(f"{bank['bank_id']}: rate-limited, will resume: {exc}")
+                print(f"{bank['bank_id']}: transient, will resume: {exc}")
             except Exception as exc:
                 # Same isolation as the poller: one bad query or API failure
                 # must not starve the banks after it. Its backfill watermark

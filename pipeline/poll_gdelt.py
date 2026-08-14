@@ -19,7 +19,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from pipeline import db
-from pipeline.http import throttled_get
+from pipeline.http import Transient, throttled_get
 
 API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 MAX_RECORDS = 250
@@ -64,8 +64,18 @@ def fetch_window(
     try:
         articles = resp.json().get("articles", [])
     except ValueError:
-        # GDELT returns plain-text errors (e.g. malformed query) with HTTP 200
-        raise RuntimeError(f"GDELT non-JSON response: {resp.text[:200]}") from None
+        # GDELT returns plain-text errors (e.g. malformed query) with HTTP 200.
+        # But a body that starts like JSON and fails to parse is a *truncated*
+        # payload, which is the API buckling rather than the query being wrong
+        # -- observed 2026-08-13, a response cut off mid-article-list. Callers
+        # that can retry later should, so say which kind this is; a malformed
+        # query would fail identically on every future run and must not be
+        # mistaken for weather.
+        body = resp.text.lstrip()
+        detail = f"GDELT non-JSON response: {resp.text[:200]}"
+        if body.startswith(("{", "[")):
+            raise Transient(f"truncated: {detail}") from None
+        raise RuntimeError(detail) from None
     if len(articles) >= MAX_RECORDS:
         if (end - start) > MIN_WINDOW:
             mid = start + (end - start) / 2

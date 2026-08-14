@@ -48,7 +48,7 @@ on:
         default: "300"
       throttle_s:
         description: "seconds between GDELT requests"
-        default: "25"
+        default: "60"
 
 env:
   SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -79,5 +79,5 @@ jobs:
           python -m pipeline.backfill_gdelt \
             --start "${{ inputs.start || '2020-01-01' }}" \
             --end "${{ inputs.end || '2025-01-01' }}" \
-            --budget-min "${{ inputs.budget_min || '150' }}" \
-            --throttle-s "${{ inputs.throttle_s || '25' }}"
+            --budget-min "${{ inputs.budget_min || '300' }}" \
+            --throttle-s "${{ inputs.throttle_s || '60' }}"

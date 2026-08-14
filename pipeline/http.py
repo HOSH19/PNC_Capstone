@@ -19,14 +19,18 @@ MAX_RETRIES = 5
 _last_request_at = 0.0
 
 
-class RetriesExhausted(RuntimeError):
-    """The API kept returning a retryable status until the budget ran out.
+class Transient(RuntimeError):
+    """The API is unavailable in a way that coming back later fixes.
 
     Subclasses RuntimeError so existing `except RuntimeError` callers are
-    unaffected; it exists so a caller that can simply come back later --
-    the backfill, which resumes from a watermark -- can tell "the API is
-    rate-limiting us" apart from "this request is broken".
+    unaffected. It exists so a caller that can simply retry later -- the
+    backfill, which resumes from a watermark -- can tell "the API is
+    struggling" apart from "this request is broken and always will be".
     """
+
+
+class RetriesExhausted(Transient):
+    """Retryable statuses kept coming until the retry budget ran out."""
 
     def __init__(self, message: str, status: int | None = None):
         super().__init__(message)

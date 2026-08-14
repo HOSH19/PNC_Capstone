@@ -91,3 +91,37 @@ def test_rate_limit_is_incomplete_not_failure():
     assert issubclass(RetriesExhausted, RuntimeError)  # old callers unaffected
     exc = RetriesExhausted("GDELT still failing after 5 retries: 429", status=429)
     assert exc.status == 429
+
+
+def test_truncated_json_is_transient_but_a_text_error_is_not():
+    """A body that starts like JSON and fails to parse is the API buckling;
+    a plain-text error is a malformed query that will fail forever. Only the
+    first should let the backfill shrug and resume next run."""
+    from pipeline import poll_gdelt
+    from pipeline.http import Transient
+
+    class FakeResp:
+        def __init__(self, text):
+            self.text = text
+
+        def json(self):
+            raise ValueError("no")
+
+    def fetch(text):
+        poll_gdelt.throttled_get = lambda *a, **kw: FakeResp(text)
+        try:
+            poll_gdelt.fetch_window(
+                "q",
+                datetime(2020, 1, 1, tzinfo=UTC),
+                datetime(2020, 1, 2, tzinfo=UTC),
+            )
+        except Exception as exc:
+            return exc
+
+    real = poll_gdelt.throttled_get
+    try:
+        assert isinstance(fetch('{"articles": [ {"url": "x"'), Transient)
+        err = fetch("ERROR: malformed query")
+        assert isinstance(err, RuntimeError) and not isinstance(err, Transient)
+    finally:
+        poll_gdelt.throttled_get = real
