@@ -291,6 +291,15 @@ def fmt(x: float, digits: int = 4) -> str:
     return f"{x:.{digits}f}"
 
 
+def display_path(path: Path) -> str:
+    """Repo-relative path for reports; absolute fallback for paths outside ROOT."""
+    resolved = path.expanduser().resolve()
+    try:
+        return str(resolved.relative_to(ROOT))
+    except ValueError:
+        return str(resolved)
+
+
 def render_report(
     results: list[dict],
     *,
@@ -307,7 +316,7 @@ def render_report(
     }.get(mode, "Backtest report")
     lines = [
         f"# {title}\n",
-        f"Labels: `{labels_path.relative_to(ROOT)}`  ",
+        f"Labels: `{display_path(labels_path)}`  ",
         f"Split: train ≤ `{split_date.isoformat()}`, "
         f"test `{split_date.isoformat()}` < date ≤ `{test_end.isoformat()}`  ",
         "Target: `distress_within_4q`. Score: higher = riskier.\n",
@@ -369,7 +378,8 @@ def render_report(
 
 
 def run_smoke(args: argparse.Namespace) -> int:
-    labels = load_labels(Path(args.labels))
+    labels_path = Path(args.labels).expanduser().resolve()
+    labels = load_labels(labels_path)
     naive = build_naive_tier1_scores(labels)
     random_scores = build_random_scores(naive, seed=args.seed)
     split_date = parse_date(args.split_date)
@@ -388,7 +398,7 @@ def run_smoke(args: argparse.Namespace) -> int:
         results,
         split_date=split_date,
         test_end=test_end,
-        labels_path=Path(args.labels),
+        labels_path=labels_path,
         mode="smoke",
     )
     print(report)

@@ -129,6 +129,26 @@ def label_bank(bank_rows: list[dict]) -> None:
             bank_rows[j]["distress_within_4q"] = 1
 
 
+def drop_unclosed_per_bank(
+    by_bank: dict[int, list[dict]],
+    *,
+    lookahead: int = LOOKAHEAD_QUARTERS,
+) -> tuple[list[dict], int]:
+    """Remove each bank's last `lookahead` rows (unobservable future)."""
+    kept_by_bank: dict[int, list[dict]] = {}
+    dropped_rows = 0
+    for cert in sorted(by_bank):
+        bank_rows = by_bank[cert]
+        if len(bank_rows) <= lookahead:
+            dropped_rows += len(bank_rows)
+            continue
+        kept_by_bank[cert] = bank_rows[:-lookahead]
+        dropped_rows += lookahead
+
+    flat = [r for cert in sorted(kept_by_bank) for r in kept_by_bank[cert]]
+    return flat, dropped_rows
+
+
 def build_rows(seed: dict[int, str]) -> list[dict]:
     rows = load_quarters(seed)
     by_bank: dict[int, list[dict]] = defaultdict(list)
@@ -136,7 +156,10 @@ def build_rows(seed: dict[int, str]) -> list[dict]:
         by_bank[r["fdic_cert_number"]].append(r)
     for bank_rows in by_bank.values():
         label_bank(bank_rows)
-    return rows
+    flat, dropped = drop_unclosed_per_bank(by_bank)
+    if dropped:
+        print(f"  dropped {dropped} unclosed seed bank-quarters")
+    return flat
 
 
 def write_csv(rows: list[dict]) -> None:

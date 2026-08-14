@@ -81,6 +81,10 @@ def parse_result_row(row) -> dict | None:
         return None
 
     city, state = split_city_state(data.get("City, State", ""))
+    url = data.get("Start Doc_url") or next(
+        (v for k, v in data.items() if k.endswith("_url")),
+        None,
+    )
 
     return {
         "institution": institution,
@@ -95,7 +99,7 @@ def parse_result_row(row) -> dict | None:
         "termination_date": data.get("Termination Date"),
         "docket_number": data.get("Docket Number"),
         "subject": data.get("Subject Matters"),
-        "url": data.get("Start Doc_url"),
+        "url": url,
     }
 
 
@@ -143,6 +147,7 @@ def fetch_all(query: str) -> list[dict]:
     results = []
     page = 0
     total = None
+    prev_page_keys: tuple[str, ...] | None = None
 
     while True:
         page_results, page_total = fetch_page(query, page)
@@ -152,6 +157,15 @@ def fetch_all(query: str) -> list[dict]:
 
         if not page_results:
             break
+
+        page_keys = tuple(sorted(external_id(a) or "" for a in page_results))
+        if prev_page_keys is not None and page_keys == prev_page_keys:
+            print(
+                f"WARNING: pagination repeated page {page} for {query!r}",
+                file=sys.stderr,
+            )
+            break
+        prev_page_keys = page_keys
 
         results.extend(page_results)
 
@@ -169,32 +183,41 @@ def fetch_all(query: str) -> list[dict]:
     return results
 
 
-def external_id(action: dict) -> str:
-    if action["docket_number"]:
-        return action["docket_number"]
+def external_id(action: dict) -> str | None:
+    """Stable OCC natural key; None when the row cannot be idempotently keyed."""
+    parts: list[str] = []
+    if action.get("docket_number"):
+        parts.append(action["docket_number"])
+    if action.get("institution"):
+        parts.append(action["institution"])
+    if action.get("individual"):
+        parts.append(action["individual"])
+    elif action.get("url"):
+        parts.append(action["url"])
+    elif action.get("action_type") and action.get("start_date"):
+        parts.append(f"{action['action_type']}|{action['start_date']}")
 
-    if action["url"]:
-        return action["url"]
+    key = "|".join(parts)
+    return key or None
 
-    return "|".join(
-        filter(
-            None,
-            [
-                action["institution"],
-                action["action_type"],
-                action["start_date"],
-                action["individual"],
-            ],
-        )
+
+def action_published_at(action: dict) -> datetime | None:
+    return parse_date(action.get("start_date")) or parse_date(
+        action.get("termination_date")
     )
 
 
-def to_row(bank_id: str, action: dict) -> dict:
+def to_row(bank_id: str, action: dict) -> dict | None:
+    eid = external_id(action)
+    published_at = action_published_at(action)
+    if not eid or published_at is None:
+        return None
+
     return {
         "source": "occ_enforcement",
-        "external_id": external_id(action),
+        "external_id": eid,
         "bank_id": bank_id,
-        "published_at": parse_date(action["start_date"]),
+        "published_at": published_at,
         "title": (
             f"{action['institution']} — "
             f"{action['action_type'] or 'OCC Enforcement Action'}"
@@ -247,6 +270,7 @@ def main() -> None:
 
             try:
                 actions = {}
+                skipped = 0
 
                 for query in bank_queries(bank):
                     print(f"Searching OCC: {query}")
@@ -254,11 +278,16 @@ def main() -> None:
                     for action in fetch_all(query):
                         if match(action["institution"]) != bank_id:
                             continue
-                        actions[external_id(action)] = action
+                        key = external_id(action)
+                        if key is None or action_published_at(action) is None:
+                            skipped += 1
+                            continue
+                        actions[key] = action
 
                 rows = [
-                    to_row(bank_id, action)
+                    row
                     for action in actions.values()
+                    if (row := to_row(bank_id, action)) is not None
                 ]
 
                 inserted_count = db.upsert_raw_items(conn, rows)
@@ -269,6 +298,7 @@ def main() -> None:
                 print(
                     f"{bank_id}: {len(rows)} OCC actions seen, "
                     f"{inserted_count} inserted"
+                    + (f", {skipped} skipped (no key/date)" if skipped else "")
                 )
 
             except Exception as exc:
@@ -314,4 +344,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

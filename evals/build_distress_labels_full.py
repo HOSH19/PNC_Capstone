@@ -28,6 +28,7 @@ from build_distress_labels import (  # noqa: E402
     NPL_LEVEL_THR,
     NPL_MULTIPLE_THR,
     START,
+    drop_unclosed_per_bank,
     label_bank,
     load_seed,
     parse_date,
@@ -38,8 +39,7 @@ SEED_LABELS = ROOT / "evals" / "items" / "distress_bank_quarter.csv"
 OUT = ROOT / "evals" / "items" / "distress_bank_quarter_full.csv"
 
 # distress_within_4q on quarter T requires observing events through T+4.
-# Drop each bank's last LOOKAHEAD_QUARTERS rows — covers both the global
-# dataset end and banks that exit the panel early (merger, closure, etc.).
+# Drop each bank's last LOOKAHEAD_QUARTERS rows — shared with seed builder.
 DROP_UNCLOSED = True
 
 
@@ -64,31 +64,6 @@ def load_all_quarters(seed_ids: dict[int, str]) -> list[dict]:
     return rows
 
 
-def drop_unclosed_per_bank(by_bank: dict[int, list[dict]]) -> tuple[list[dict], int]:
-    """Remove each bank's last LOOKAHEAD_QUARTERS rows (unobservable future)."""
-    if not DROP_UNCLOSED:
-        flat = [r for cert in sorted(by_bank) for r in by_bank[cert]]
-        return flat, 0
-
-    kept_by_bank: dict[int, list[dict]] = {}
-    dropped_rows = 0
-    for cert in sorted(by_bank):
-        bank_rows = by_bank[cert]
-        if len(bank_rows) <= LOOKAHEAD_QUARTERS:
-            dropped_rows += len(bank_rows)
-            continue
-        kept_by_bank[cert] = bank_rows[:-LOOKAHEAD_QUARTERS]
-        dropped_rows += LOOKAHEAD_QUARTERS
-
-    flat = [r for cert in sorted(kept_by_bank) for r in kept_by_bank[cert]]
-    print(
-        f"  dropped {dropped_rows:,} unclosed bank-quarters "
-        f"({len(by_bank):,} certs -> {len(kept_by_bank):,} with closed labels): "
-        f"{sum(len(r) for r in by_bank.values()):,} -> {len(flat):,} rows"
-    )
-    return flat, dropped_rows
-
-
 def build_rows(seed_ids: dict[int, str]) -> list[dict]:
     rows = load_all_quarters(seed_ids)
     by_bank: dict[int, list[dict]] = defaultdict(list)
@@ -96,7 +71,14 @@ def build_rows(seed_ids: dict[int, str]) -> list[dict]:
         by_bank[r["fdic_cert_number"]].append(r)
     for bank_rows in by_bank.values():
         label_bank(bank_rows)
-    flat, _ = drop_unclosed_per_bank(by_bank)
+    if not DROP_UNCLOSED:
+        return [r for cert in sorted(by_bank) for r in by_bank[cert]]
+    flat, dropped = drop_unclosed_per_bank(by_bank, lookahead=LOOKAHEAD_QUARTERS)
+    print(
+        f"  dropped {dropped:,} unclosed bank-quarters "
+        f"({len(by_bank):,} certs -> {len({r['fdic_cert_number'] for r in flat}):,} with closed labels): "
+        f"{sum(len(r) for r in by_bank.values()):,} -> {len(flat):,} rows"
+    )
     return flat
 
 

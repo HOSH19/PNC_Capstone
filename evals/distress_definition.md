@@ -89,6 +89,9 @@ Additional rules:
 - Quarters with insufficient history to evaluate the event rule (no prior
   quarter) are never events; they may still receive `distress_within_4q = 1`
   if a later event falls within the horizon.
+- The last **4 quarters per bank** are dropped after labeling (unobservable
+  future for the lookahead target). Both `build_distress_labels.py` and
+  `build_distress_labels_full.py` apply this policy.
 - Missing inputs for a leg → that leg is false (no silent `1`).
 
 ```text
