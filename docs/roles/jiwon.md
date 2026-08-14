@@ -200,6 +200,13 @@ Loaded 407,032 rows via `pipeline/backfill_gkg.py` — BigQuery GKG, not the
 DOC API, which rate-limits on cumulative volume and refuses a 3,000-request
 pull at any spacing. Free tier covered it (356 GiB of 1 TB).
 
+Live collection followed it there (`pipeline/poll_gkg.py`, scheduled with a
+service-account key), because the DOC API was refusing the poller too — no
+successful run since ~2026-08-01. Retraining was checked and not needed: the
+labeler scores *better* on GKG-like text (kappa 0.678 vs 0.486). But the gold
+slices are still DOC API draws, so the gate now measures the labeler and no
+longer samples the corpus.
+
 ⚠️ **Tell whoever runs the backtest**: backfill rows are ~100% self-naming in
 the title, live rows 9.4%, so the attribution gate must be applied to both or
 the backtest reads better than production for reasons unrelated to the model.
