@@ -38,6 +38,7 @@ import csv
 import html
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -50,6 +51,12 @@ from pipeline.poll_agency_rss import build_alias_index, match_banks
 from pipeline.poll_gdelt import normalize_title_hash
 
 TABLE = "gdelt-bq.gdeltv2.gkg_partitioned"
+# Billing project for the query -- the GKG tables themselves are public, so
+# this only says who pays and who is authenticated. Overridable because CI
+# will authenticate as a service account in its own project, and because the
+# first project used here was a university one whose reauth policy made
+# unattended runs impossible.
+PROJECT = os.environ.get("BIGQUERY_PROJECT", "ucla-capstone-505523")
 
 # Aliases shorter than this are dropped from the BigQuery pre-filter: "PNC"
 # and "BNY" match too much inside a 76k-row/day English corpus. The precise
@@ -176,7 +183,7 @@ def to_rows(gkg_rows: list[dict], index: list) -> tuple[list[dict], dict]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--year", type=int, required=True)
-    ap.add_argument("--project", default="c247a-488706")
+    ap.add_argument("--project", default=PROJECT)
     ap.add_argument("--dry-run", action="store_true", help="query, insert nothing")
     args = ap.parse_args()
 
