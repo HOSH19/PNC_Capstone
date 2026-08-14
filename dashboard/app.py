@@ -5,29 +5,14 @@ Mirrors the first-screen concept in dashboard/concept/ (mentor discussion,
 score tables land once Phase 2 (scoring) and Phase 3 (index) exist; see
 db/migrations/011_scoring_tables.sql for the current shared contract.
 
-Extends the original two-signal concept (fundamentals x news sentiment) with
-two more panels sourced from the sources EDA's findings (eda/reports/):
-price risk (market_daily — dense coverage, leading signal) and CFPB
-complaints (cfpb_complaint — consumer-facing banks only, reactive/severity
-signal, now framed as "Customer Complaint Risk"). A macro banner
-(fred_observation) is shown once, globally, since EDA found it's a systemic
-backdrop rather than a per-bank signal.
-
 Fundamentals is organized as a CAMELS-style profile grouped into Capital,
 Credit Quality, Liquidity, and Profitability (Management/Sensitivity metrics
 that don't fit a quarterly ratio format — enforcement actions, unrealized
 losses vs. threshold — surface as Key Alerts instead). It's the first panel
 on the page and spans full width since it now carries alerts + a grouped
 table + a per-metric history view. The composite Stable/Watch/Elevated Risk
-status badge is still driven solely by fundamentals x sentiment per the
-original rubric; folding price/complaints into that combined score is a
-scoring-methodology decision for the team, not made here.
-
-Also adds trend/momentum and peer-percentile context, framed for the
-external counterparty-risk-analyst persona (monitors exposure to these
-banks from another firm) — comparisons are scoped to US peer groups. Peer
-groups and percentiles are illustrative mock groupings, not a computed
-cohort — see RISKS in the accompanying review notes.
+status badge is driven solely by fundamentals x sentiment per the original
+rubric.
 
 Visual styling (cards, pills, gauge, segmented bar, keyword/category bars,
 sparklines) is a custom CSS + Altair layer on top of Streamlit's default
@@ -36,6 +21,7 @@ widgets — see render_* functions below and the CSS block in main().
 
 import json
 import os
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -77,25 +63,6 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"], row_factory=dict_row) as _co
             "FROM bank_index_score WHERE bank_id IS NOT NULL"
         )
         _INDEX_SCORES = pd.DataFrame(_cur.fetchall())
-
-        # St. Louis Fed Financial Stress Index — one macro series, no per-bank split.
-        _cur.execute(
-            "SELECT date, value FROM fred_observation "
-            "WHERE series_id = 'STLFSI4' ORDER BY date DESC LIMIT 1"
-        )
-        _macro_row = _cur.fetchone()
-
-        # cfpb_complaint: only the columns render_complaints needs — narrative
-        # text is excluded to keep this load light (210k+ rows otherwise).
-        _cur.execute(
-            "SELECT bank_id, date_received, product, timely_response "
-            "FROM cfpb_complaint WHERE bank_id IS NOT NULL"
-        )
-        _COMPLAINTS = pd.DataFrame(_cur.fetchall())
-
-        # For load_complaints_live()'s coverage-tier rank.
-        _cur.execute("SELECT bank_id FROM bank")
-        _n_tracked_banks = len(_cur.fetchall())
 
         # bank_index_feature: real, for load_feature_attribution() (the "what's
         # unusual about this bank" panel) — separate from _INDEX_FEATURES
@@ -161,28 +128,6 @@ def _gp_distress_prob(rows: np.ndarray) -> np.ndarray:
     raw = _gp_model.predict_proba(_gp_scaler.transform(rows))[:, 1]
     logit = _PLATT_COEF * raw + _PLATT_INTERCEPT
     return 1 / (1 + np.exp(-logit))
-
-# STLFSI4 has no official band definitions; 0 is the series' own long-run
-# average, so "Normal" below 0 vs "Elevated" above 0 is the one line the data
-# itself draws. 2 is a coarse second cut — 2020's covid peak hit ~5.7, 2008 hit
-# ~9.7, both far above it — so real distress still reads as a distinct tier.
-_macro_value = float(_macro_row["value"])
-_macro_status = "Normal" if _macro_value < 0 else ("Elevated" if _macro_value < 2 else "Severe")
-MACRO = {
-    "series": "St. Louis Fed Financial Stress Index",
-    "status": _macro_status,
-    "note": (
-        f"{_macro_value:+.2f} as of {_macro_row['date']:%b %-d, %Y} — industry-wide "
-        "backdrop, not a per-bank signal. Spikes at 2008 / 2020 / 2023 lift every "
-        f"bank's risk together; currently {'below' if _macro_value < 0 else 'above'} "
-        "its long-run average."
-    ),
-}
-
-# Per-tracked-bank complaint totals, for the coverage-tier rank in
-# load_complaints_live(). Banks with zero complaints rank last, same as if
-# they'd been fetched with count 0.
-_COMPLAINT_TOTALS = _COMPLAINTS.groupby("bank_id").size()
 
 _BAND_LABEL = {"sound": "Sound", "neutral": "Neutral", "distress": "Distress signal"}
 _STATUS_DISPLAY = {
@@ -336,60 +281,21 @@ def load_fundamentals_mock(bank_id: str) -> dict | None:
         "features": features,
     }
 
-def load_complaints_live(bank_id: str) -> dict | None:
-    """Build a `complaints` dict (MOCK_BANKS shape) from cfpb_complaint.
-
-    Returns None if `bank_id` has no rows, same as a hand-written entry
-    omitting complaints.
-
-    risk_badge is always "Insufficient data": cfpb_complaint only goes back to
-    2025-07 (the poller's own start date, not CFPB's), so no bank has the 24
-    months a genuine year-over-year trend needs yet — showing a badge based on
-    raw volume alone would read as a risk signal it isn't. total/categories/
-    monthly volume are still real and shown regardless.
-    """
-    bank_rows = _COMPLAINTS[_COMPLAINTS["bank_id"] == bank_id]
-    total = len(bank_rows)
-    if total == 0:
-        return None
-
-    rank = int((_COMPLAINT_TOTALS >= total).sum())
-    coverage_tier = (
-        f"Rank {rank} of {_n_tracked_banks} tracked banks by volume, since "
-        f"{bank_rows['date_received'].min():%b %Y}"
-    )
-    coverage_period = (
-        f"{bank_rows['date_received'].min():%b %Y}"
-        f"–{bank_rows['date_received'].max():%b %Y}"
-    )
-    timely_response_rate = round(100 * bank_rows["timely_response"].mean())
-
-    top = bank_rows["product"].value_counts(normalize=True).head(5) * 100
-    top_categories = [(name, round(pct)) for name, pct in top.items()]
-
-    monthly_trend = None
-    if total >= 30:
-        month_label = bank_rows["date_received"].apply(lambda d: f"{d:%b '%y}")
-        counts = month_label.value_counts()
-        monthly_trend = [int(counts.get(label, 0)) for label in MONTHLY_LABELS]
-
-    return {
-        "total": total,
-        "risk_badge": "Insufficient data",
-        "coverage_tier": coverage_tier,
-        "coverage_period": coverage_period,
-        "yoy_growth_pct": None,
-        "timely_response_rate": timely_response_rate,
-        "top_categories": top_categories,
-        "monthly_trend": monthly_trend,
-        "keywords": [],
-    }
-
-
 def _format_feature_value(v) -> str:
     if v is None or pd.isna(v):
         return "—"
-    return f"{v:.4f}" if abs(v) < 1 else f"{v:,.2f}"
+    return f"{v:,.2f}"
+
+
+def _clean_feature_name(display_name: str) -> str:
+    """bank_index_feature.display_name carries the model's global gain rank
+    ('#06 ...') and, for one feature, the raw transform in backticks
+    ('`log(1 + total assets)` — bank size'). Strip both so the table shows
+    a business-readable label, not model internals."""
+    name = re.sub(r"^#\d+\s*", "", display_name)
+    name = re.sub(r"`[^`]*`\s*", "", name)
+    name = name.strip(" —").strip()
+    return name[:1].upper() + name[1:] if name else name
 
 
 def load_feature_attribution(bank_id: str, top_n: int = 5) -> list[dict] | None:
@@ -435,7 +341,7 @@ def load_feature_attribution(bank_id: str, top_n: int = 5) -> list[dict] | None:
     for i, name in enumerate(_GP_FEATURES):
         row = bank_row.loc[name]
         contributions.append({
-            "name": row["display_name"],
+            "name": _clean_feature_name(row["display_name"]),
             "value": row["value"],
             "peer_mean": peer_mean.get(name),
             "contribution": baseline_prob - perturbed_probs[i],
@@ -447,10 +353,6 @@ def load_feature_attribution(bank_id: str, top_n: int = 5) -> list[dict] | None:
 
 
 FEATURE_QUARTERS = ["Q1 '25", "Q2 '25", "Q3 '25", "Q4 '25", "Q1 '26"]
-MONTHLY_LABELS = [
-    "Aug '25", "Sep '25", "Oct '25", "Nov '25", "Dec '25", "Jan '26",
-    "Feb '26", "Mar '26", "Apr '26", "May '26", "Jun '26", "Jul '26",
-]
 
 MOCK_BANKS = {
     "Wells Fargo": {
@@ -463,8 +365,6 @@ MOCK_BANKS = {
             "persistently negative around regulatory penalties — the "
             "pattern the early-warning view is built to surface."
         ),
-        "peer_group": "US Systemically Important Banks (G-SIBs)",
-        "peer_group_n": 8,
         "sentiment": {
             "score": -0.31,
             "label": "Negative",
@@ -475,7 +375,6 @@ MOCK_BANKS = {
                 -0.12, -0.17, -0.15, -0.20, -0.18, -0.23, -0.21, -0.26, -0.24,
                 -0.29, -0.27, -0.31,
             ],
-            "peer_percentile_negative": 72,
         },
         "keywords": {
             "negative": [
@@ -502,23 +401,6 @@ MOCK_BANKS = {
             ("Bank raises quarterly dividend, extends buyback", "positive", "marketwatch.com", 5, "GDELT"),
             ("Analysts flag slower fee income amid asset-cap constraints", "negative", "ft.com", 6, "GDELT"),
         ],
-        "price_risk": {
-            "risk_badge": "Moderate",
-            "return_30d": -2.8,
-            "vol_30d": 0.24,
-            "largest_move": {"pct": -3.4, "date": "Jul 18"},
-            "sparkline_30d": [
-                100.0, 99.7, 100.1, 99.8, 100.0, 99.6, 99.9, 99.4, 99.7, 99.2,
-                99.5, 99.0, 98.7, 99.0, 98.5, 98.8, 98.3, 98.6, 95.3, 95.6,
-                96.0, 95.7, 96.1, 95.8, 96.2, 95.9, 96.3, 96.7, 97.0, 97.2,
-            ],
-            "vol_3y": 0.27,
-            "max_drawdown_3y": -0.35,
-            "coverage": "103/104 banks have ≥5yr daily history",
-            "peer_percentile_vol": 40,
-            "peer_rank": "4th least volatile of 8 G-SIB peers",
-        },
-        "complaints": load_complaints_live("wfc"),
         "feature_drivers": load_feature_attribution("wfc"),
     },
     "Western Alliance": {
@@ -531,8 +413,6 @@ MOCK_BANKS = {
             "sentiment accelerates — both axes now point the same way, "
             "which is the strongest configuration of the warning signal."
         ),
-        "peer_group": "Regional banks, CRE-exposed",
-        "peer_group_n": 20,
         "sentiment": {
             "score": -0.47,
             "label": "Negative",
@@ -543,7 +423,6 @@ MOCK_BANKS = {
                 -0.17, -0.24, -0.22, -0.29, -0.27, -0.34, -0.32, -0.39, -0.37,
                 -0.44, -0.42, -0.47,
             ],
-            "peer_percentile_negative": 90,
         },
         "keywords": {
             "negative": [
@@ -568,59 +447,21 @@ MOCK_BANKS = {
             ("CRE concentration draws renewed analyst scrutiny", "negative", "barrons.com", 2, "GDELT"),
             ("Completed capital raise shores up balance sheet", "positive", "marketwatch.com", 4, "GDELT"),
         ],
-        "price_risk": {
-            "risk_badge": "High",
-            "return_30d": -9.6,
-            "vol_30d": 0.58,
-            "largest_move": {"pct": -11.4, "date": "Jul 09"},
-            "sparkline_30d": [
-                100.0, 99.0, 98.5, 97.8, 97.0, 96.5, 95.8, 95.0, 94.2, 83.5,
-                84.5, 85.5, 86.0, 85.2, 86.8, 87.5, 86.9, 88.0, 87.4, 88.8,
-                88.0, 89.2, 88.5, 89.8, 89.0, 90.2, 89.6, 90.8, 90.2, 90.4,
-            ],
-            "vol_3y": 0.55,
-            "max_drawdown_3y": -0.74,
-            "coverage": "103/104 banks have ≥5yr daily history",
-            "peer_percentile_vol": 95,
-            "peer_rank": "2nd most volatile of 20 CRE-exposed peers",
-        },
-        "complaints": load_complaints_live("wal"),
         "feature_drivers": load_feature_attribution("wal"),
     },
     # Placeholder demo entries — no concept mockup yet for sentiment /
-    # fundamentals, kept minimal on purpose. Price + complaints panels are
-    # filled in below since those signals score every bank regardless of a
-    # news-sentiment story (that's the point of the price panel per EDA).
+    # fundamentals, kept minimal on purpose.
     "PNC Financial": {
         "name": "PNC Financial Services Group",
         "ticker": "PNC",
         "cert": "6384",
         "rssd": "817824",
         "summary": "Placeholder — no illustrative sentiment data drafted yet. Fundamentals below are wired to index/mock/*.csv.",
-        "peer_group": "Super-regional / diversified banks",
-        "peer_group_n": 15,
         "sentiment": None,
         "keywords": None,
         "alerts": [],
         "fundamentals": load_fundamentals_mock("pnc"),
         "recent_items": [],
-        "price_risk": {
-            "risk_badge": "Low",
-            "return_30d": 1.4,
-            "vol_30d": 0.19,
-            "largest_move": {"pct": 2.1, "date": "Jul 22"},
-            "sparkline_30d": [
-                100.0, 100.2, 99.9, 100.3, 100.1, 100.4, 100.0, 100.5, 100.2, 100.6,
-                100.3, 100.7, 100.4, 100.8, 100.5, 100.9, 100.6, 101.0, 100.7, 101.1,
-                100.8, 101.2, 103.3, 102.9, 103.1, 102.7, 103.0, 101.9, 101.6, 101.4,
-            ],
-            "vol_3y": 0.30,
-            "max_drawdown_3y": -0.30,
-            "coverage": "103/104 banks have ≥5yr daily history",
-            "peer_percentile_vol": 50,
-            "peer_rank": "8th of 15 super-regional peers",
-        },
-        "complaints": load_complaints_live("pnc"),
         "feature_drivers": load_feature_attribution("pnc"),
     },
     "JPMorgan Chase": {
@@ -629,30 +470,11 @@ MOCK_BANKS = {
         "cert": "628",
         "rssd": "852218",
         "summary": "Placeholder — no illustrative sentiment data drafted yet. Fundamentals below are wired to index/mock/*.csv.",
-        "peer_group": "US Systemically Important Banks (G-SIBs)",
-        "peer_group_n": 8,
         "sentiment": None,
         "keywords": None,
         "alerts": [],
         "fundamentals": load_fundamentals_mock("jpm"),
         "recent_items": [],
-        "price_risk": {
-            "risk_badge": "Low",
-            "return_30d": 2.3,
-            "vol_30d": 0.17,
-            "largest_move": {"pct": 2.6, "date": "Jul 15"},
-            "sparkline_30d": [
-                100.0, 100.2, 100.4, 100.3, 100.5, 100.7, 100.6, 100.8, 101.0, 100.9,
-                101.1, 101.3, 101.2, 101.4, 101.6, 104.2, 103.9, 104.1, 103.8, 104.0,
-                103.7, 103.9, 103.6, 103.8, 103.5, 103.7, 103.4, 103.6, 102.9, 102.3,
-            ],
-            "vol_3y": 0.26,
-            "max_drawdown_3y": -0.28,
-            "coverage": "103/104 banks have ≥5yr daily history",
-            "peer_percentile_vol": 25,
-            "peer_rank": "7th least volatile of 8 G-SIB peers",
-        },
-        "complaints": load_complaints_live("jpm"),
         "feature_drivers": load_feature_attribution("jpm"),
     },
 }
@@ -672,14 +494,63 @@ RED = "#f2705c"
 AMBER = "#e0a94a"
 GREEN = "#4caf7d"
 
-RISK_BADGE_COLOR = {
-    "Low": GREEN,
-    "Moderate": AMBER,
-    "High": RED,
-    "Insufficient data": TEXT_MUTED,
+CAMELS_GROUPS = ["Capital", "Credit Quality", "Liquidity", "Profitability"]
+
+# Four-level classification from README.md's original concept (mentor
+# discussion, 2026-07-12): Stable / Watch / Elevated Risk / Imminent
+# Disruption, driven by fundamentals x sentiment. The cutoffs below (the
+# score<30 "critical" line, the -0.4 "strong negative" sentiment line) are a
+# first judgment call, not a team-agreed threshold — nothing in the mock data
+# currently reaches Imminent Disruption, so that tier is unverified against a
+# demo case. Revisit once "confirmed distress events" (the other Imminent
+# Disruption trigger in README.md) has a real source to check against.
+IMMINENT_CRITICAL_SCORE = 30
+STRONG_NEGATIVE_SENTIMENT = -0.4
+
+STATUS_COLOR = {
+    "Stable": GREEN,
+    "Watch": AMBER,
+    "Elevated Risk": RED,
+    "Imminent Disruption": "#b91c3c",
 }
 
-CAMELS_GROUPS = ["Capital", "Credit Quality", "Liquidity", "Profitability"]
+FUNDAMENTALS_STATUS_COLOR = {
+    "Sound": GREEN,
+    "Neutral": AMBER,
+    "Distress signal": RED,
+}
+
+SENTIMENT_LABEL_COLOR = {
+    "Positive": GREEN,
+    "Neutral": AMBER,
+    "Negative": RED,
+}
+
+
+def compute_status(bank: dict) -> str:
+    """Stable / Watch / Elevated Risk / Imminent Disruption, per README.md's
+    ladder. Fundamentals-only when sentiment isn't scored for this bank
+    (most MOCK_BANKS entries) — can't confirm the "both axes" tiers without
+    a sentiment read, so those banks cap out at Elevated Risk."""
+    fundamentals = bank.get("fundamentals")
+    score = fundamentals["score"] if fundamentals else None
+    sentiment = bank.get("sentiment")
+
+    if sentiment is None:
+        if score is None or score >= 90:
+            return "Stable"
+        if score <= 80:
+            return "Elevated Risk"
+        return "Watch"
+
+    sent_negative = sentiment["label"] == "Negative"
+    if score is not None and score < IMMINENT_CRITICAL_SCORE and sent_negative:
+        return "Imminent Disruption"
+    if score is not None and score <= 80 and sent_negative:
+        return "Elevated Risk"
+    if sent_negative or (score is not None and score < 90):
+        return "Watch"
+    return "Stable"
 
 
 def pill_html(text: str, color: str, bg: str, border: str, size: str = "0.85rem") -> str:
@@ -757,68 +628,6 @@ def _feature_history_chart(quarters: list, values: list, color: str) -> alt.Char
             tooltip=[alt.Tooltip("quarter:N", title="Quarter"), alt.Tooltip("value:Q", title="Value")],
         )
         .properties(height=160, background="transparent")
-        .configure_view(strokeWidth=0)
-    )
-
-
-def _price_sparkline_chart(values: list, color: str, height: int = 150) -> alt.Chart:
-    df = pd.DataFrame({"day": range(1, len(values) + 1), "value": values})
-    y_pad = max(0.5, (max(values) - min(values)) * 0.15)
-    return (
-        alt.Chart(df)
-        .mark_line(color=color, strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=25, color=color))
-        .encode(
-            x=alt.X("day:Q", title="Trading Day", axis=alt.Axis(
-                labelColor=TEXT_MUTED, titleColor=TEXT_MUTED, labelFontSize=10, titleFontSize=11,
-                grid=False, domainColor=BORDER, tickColor=BORDER, format="d",
-            )),
-            y=alt.Y("value:Q", title="Indexed Price (Day 1 = 100)", scale=alt.Scale(domain=[min(values) - y_pad, max(values) + y_pad]), axis=alt.Axis(
-                labelColor=TEXT_MUTED, titleColor=TEXT_MUTED, labelFontSize=10, titleFontSize=11,
-                gridColor=BORDER, domainColor=BORDER, tickColor=BORDER,
-            )),
-            tooltip=[alt.Tooltip("day:Q", title="Trading day"), alt.Tooltip("value:Q", title="Indexed price", format=".1f")],
-        )
-        .properties(height=height, background="transparent")
-        .configure_view(strokeWidth=0)
-    )
-
-
-def _monthly_trend_chart(labels: list, values: list, color: str, height: int = 150) -> alt.Chart:
-    df = pd.DataFrame({"month": labels, "count": values})
-    return (
-        alt.Chart(df)
-        .mark_line(color=color, strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=30, color=color))
-        .encode(
-            x=alt.X("month:N", sort=labels, title="Month", axis=alt.Axis(
-                labelColor=TEXT_MUTED, titleColor=TEXT_MUTED, labelFontSize=10, titleFontSize=11,
-                grid=False, domainColor=BORDER, tickColor=BORDER, labelAngle=-40,
-            )),
-            y=alt.Y("count:Q", title="Complaints / Month", axis=alt.Axis(
-                labelColor=TEXT_MUTED, titleColor=TEXT_MUTED, labelFontSize=10, titleFontSize=11,
-                gridColor=BORDER, domainColor=BORDER, tickColor=BORDER,
-            )),
-            tooltip=[alt.Tooltip("month:N", title="Month"), alt.Tooltip("count:Q", title="Complaints")],
-        )
-        .properties(height=height, background="transparent")
-        .configure_view(strokeWidth=0)
-    )
-
-
-def _category_bar_chart(rows: list, color: str) -> alt.Chart:
-    df = pd.DataFrame(rows, columns=["category", "pct"])
-    return (
-        alt.Chart(df)
-        .mark_bar(color=color, cornerRadiusTopRight=3, cornerRadiusBottomRight=3)
-        .encode(
-            y=alt.Y("category:N", sort="-x", title=None, axis=alt.Axis(
-                labelColor=TEXT_MUTED, labelFontSize=11, domain=False, ticks=False,
-            )),
-            x=alt.X("pct:Q", title=None, axis=alt.Axis(
-                labelColor=TEXT_MUTED, labelFontSize=10, gridColor=BORDER, domainColor=BORDER,
-            )),
-            tooltip=[alt.Tooltip("category:N", title="Category"), alt.Tooltip("pct:Q", title="% of complaints")],
-        )
-        .properties(height=155, background="transparent")
         .configure_view(strokeWidth=0)
     )
 
@@ -1088,7 +897,18 @@ div[class*="st-key-card-"] {{
 
 
 def render_header(bank: dict) -> None:
-    st.subheader(bank["name"])
+    name_col, status_col = st.columns([5, 1], gap="small", vertical_alignment="center")
+    with name_col:
+        st.subheader(bank["name"])
+    with status_col:
+        status = compute_status(bank)
+        color = STATUS_COLOR[status]
+        st.markdown(
+            '<div style="display:flex;justify-content:flex-end;">'
+            + pill_html(f"● {status}", color, f"{color}22", f"{color}66", size="1.05rem")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
     st.caption(f"{bank['ticker']} · cert {bank['cert']} · rssd {bank['rssd']}")
     st.write(bank["summary"])
 
@@ -1139,9 +959,14 @@ def render_sentiment(bank: dict) -> None:
     if sentiment is None:
         st.info("No sentiment data yet.")
         return
+    sent_color = SENTIMENT_LABEL_COLOR.get(sentiment["label"], TEXT_MUTED)
+    st.markdown(
+        pill_html(sentiment["label"], sent_color, f"{sent_color}22", f"{sent_color}66"),
+        unsafe_allow_html=True,
+    )
     delta = round(sentiment["trend"][-1] - sentiment["trend"][-8], 2)
     st.metric(
-        f"{sentiment['label']} · {sentiment['n_items']} items scored",
+        f"{sentiment['n_items']} items scored",
         sentiment["score"],
         delta=delta,
         help="Change vs ~1 week ago (green = improving, red = worsening)",
@@ -1161,9 +986,6 @@ def render_sentiment(bank: dict) -> None:
         unsafe_allow_html=True,
     )
     st.line_chart(sentiment["trend"], height=160, color=RED)
-    peer_pct = sentiment.get("peer_percentile_negative")
-    if peer_pct is not None:
-        st.caption(f"More negative than {peer_pct}% of {bank['peer_group']} peers")
 
 
 def render_keywords(bank: dict) -> None:
@@ -1199,17 +1021,20 @@ def render_fundamentals(bank: dict) -> None:
         st.info("No fundamentals data yet.")
         return
 
+    status_color = FUNDAMENTALS_STATUS_COLOR.get(fundamentals["label"], TEXT_MUTED)
+    st.markdown(
+        pill_html(fundamentals["label"], status_color, f"{status_color}22", f"{status_color}66"),
+        unsafe_allow_html=True,
+    )
+
     trend = fundamentals.get("trend")
     delta = (trend[-1] - trend[-2]) if trend and len(trend) > 1 else None
     st.metric(
-        fundamentals["label"],
+        "Composite score",
         fundamentals["score"],
         delta=delta,
         help="Change vs prior quarter" if delta is not None else None,
     )
-    peer_pct = fundamentals.get("peer_percentile")
-    if peer_pct is not None:
-        st.caption(f"Safer than {peer_pct}% of {bank['peer_group']} peers (n={bank['peer_group_n']})")
     marker_pct = max(0, min(100, (fundamentals["score"] - 50) / 50 * 100))
     st.markdown(
         f'<div class="gauge-track"><div class="gauge-marker" style="left:{marker_pct}%;"></div></div>'
@@ -1303,12 +1128,7 @@ def render_feature_drivers(bank: dict) -> None:
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="panel-caption">Real local attribution: the frozen gp50_prod_v1 model refit from '
-        "index/fundamentals/{train_sample.parquet, frozen_params.json}, re-scored with each feature in turn "
-        "swapped to this quarter's peer average. The shift in distress_prob that swap causes is that "
-        "feature's contribution — this ranks by actual effect on this bank's score, not by the model's "
-        "global gain rank shown in each name. Validated by reproducing bank_index_score's published "
-        "distress_prob exactly for every gp50_prod_v1 row checked.</div>",
+        '<div class="panel-caption">Top 5 features by effect on this bank\'s score</div>',
         unsafe_allow_html=True,
     )
     drivers = bank.get("feature_drivers")
@@ -1333,7 +1153,7 @@ def render_feature_drivers(bank: dict) -> None:
         )
     st.markdown(
         "<table class='fund-table'><thead><tr>"
-        "<th>Feature (name carries model-wide gain rank)</th><th>Latest</th>"
+        "<th>Feature</th><th>Latest</th>"
         "<th>Peer avg, this Q</th><th>Contribution to distress_prob</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>",
         unsafe_allow_html=True,
@@ -1343,135 +1163,6 @@ def render_feature_drivers(bank: dict) -> None:
         "swapped to the peer average (others held fixed) — how much this specific input, as it stands, "
         "moves this bank's score away from a typical peer."
     )
-
-
-def render_macro_banner() -> None:
-    st.markdown(
-        f'<div style="border:1px solid {BORDER};background:{BG_CARD};border-radius:10px;'
-        f'padding:10px 16px;margin-bottom:14px;color:{TEXT_PRIMARY};font-size:0.85rem;">'
-        f"🌐 <strong>Macro backdrop — {MACRO['series']}: {MACRO['status']}</strong> · "
-        f'<span style="color:{TEXT_MUTED};">{MACRO["note"]}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def render_price_risk(bank: dict) -> None:
-    st.markdown('<div class="panel-title">PRICE RISK</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-caption">yfinance daily close · market-observed, leading signal, densest coverage</div>',
-        unsafe_allow_html=True,
-    )
-    price_risk = bank.get("price_risk")
-    if price_risk is None:
-        st.info("No price data yet.")
-        return
-
-    badge_color = RISK_BADGE_COLOR.get(price_risk["risk_badge"], TEXT_MUTED)
-    st.markdown(
-        pill_html(f"Market Risk: {price_risk['risk_badge']}", badge_color, f"{badge_color}22", f"{badge_color}66"),
-        unsafe_allow_html=True,
-    )
-    st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
-
-    ret = price_risk["return_30d"]
-    ret_color = GREEN if ret >= 0 else RED
-    move = price_risk["largest_move"]
-    move_color = GREEN if move["pct"] >= 0 else RED
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(stat_tile_html("30-Day Return", f"{ret:+.1f}%", ret_color), unsafe_allow_html=True)
-    with c2:
-        st.markdown(stat_tile_html("30-Day Realized Vol", f"{price_risk['vol_30d']:.2f}"), unsafe_allow_html=True)
-    with c3:
-        st.markdown(
-            stat_tile_html("Largest Daily Move", f"{move['pct']:+.1f}% ({move['date']})", move_color),
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
-    st.caption("Last 30 trading days")
-    st.altair_chart(
-        _price_sparkline_chart(price_risk["sparkline_30d"], ACCENT_TEAL), width="stretch", theme=None
-    )
-
-    with st.expander("3-year context & peer comparison"):
-        st.caption(price_risk["coverage"])
-        e1, e2 = st.columns(2)
-        with e1:
-            st.markdown(stat_tile_html("3-Year Annualized Volatility", f"{price_risk['vol_3y']:.2f}"), unsafe_allow_html=True)
-        with e2:
-            st.markdown(
-                stat_tile_html("3-Year Max Drawdown", f"{price_risk['max_drawdown_3y']:.0%}", RED),
-                unsafe_allow_html=True,
-            )
-        peer_rank = price_risk.get("peer_rank")
-        if peer_rank:
-            st.markdown(
-                f'<div style="margin-top:12px;font-size:0.85rem;color:{TEXT_MUTED};">'
-                f'{peer_rank} — riskier than <span style="color:{TEXT_PRIMARY};font-weight:600;">'
-                f'{price_risk["peer_percentile_vol"]}%</span> of {bank["peer_group"]} peers</div>',
-                unsafe_allow_html=True,
-            )
-
-
-def render_complaints(bank: dict) -> None:
-    st.markdown('<div class="panel-title">CUSTOMER COMPLAINT RISK</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-caption">cfpb_complaint · reactive/conduct-risk signal, consumer-facing banks only</div>',
-        unsafe_allow_html=True,
-    )
-    complaints = bank.get("complaints")
-    if complaints is None:
-        st.info("No complaint data yet.")
-        return
-
-    badge_color = RISK_BADGE_COLOR.get(complaints["risk_badge"], TEXT_MUTED)
-    st.markdown(
-        pill_html(f"Complaint Risk: {complaints['risk_badge']}", badge_color, f"{badge_color}22", f"{badge_color}66"),
-        unsafe_allow_html=True,
-    )
-    st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
-
-    st.metric(f"Total complaints — {bank['ticker']} ({complaints['coverage_period']})", f"{complaints['total']:,}")
-    st.markdown(
-        '<ul class="subtitle-list">'
-        f"<li>{complaints['coverage_tier']}</li>"
-        "</ul>",
-        unsafe_allow_html=True,
-    )
-
-    if complaints["monthly_trend"] is None:
-        st.caption("Volume too thin for a reliable category breakdown or monthly trend.")
-        return
-
-    if complaints["yoy_growth_pct"] is None:
-        st.caption("Under 24 months of complaint history collected so far — year-over-year trend not available yet.")
-        st.markdown(stat_tile_html("Timely Response Rate", f"{complaints['timely_response_rate']}%", GREEN), unsafe_allow_html=True)
-    else:
-        c1, c2 = st.columns(2)
-        with c1:
-            yoy = complaints["yoy_growth_pct"]
-            st.markdown(stat_tile_html("YoY Complaint Growth", f"{yoy:+.0f}%", AMBER if yoy > 10 else TEXT_PRIMARY), unsafe_allow_html=True)
-        with c2:
-            st.markdown(stat_tile_html("Timely Response Rate", f"{complaints['timely_response_rate']}%", GREEN), unsafe_allow_html=True)
-
-    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
-    st.caption("Top complaint categories (% of total)")
-    st.altair_chart(_category_bar_chart(complaints["top_categories"], AMBER), width="stretch", theme=None)
-
-    st.caption("Monthly complaint volume, last 12 months")
-    st.altair_chart(
-        _monthly_trend_chart(MONTHLY_LABELS, complaints["monthly_trend"], AMBER), width="stretch", theme=None
-    )
-
-    if complaints["keywords"]:
-        with st.expander("Distinctive complaint themes (TF-IDF)"):
-            st.markdown(_keyword_bars_html(complaints["keywords"], AMBER), unsafe_allow_html=True)
-            st.caption(
-                "Number by each bar = TF-IDF distinctiveness score (0–1) for that term in this bank's complaint "
-                "narratives — how much it sets this bank apart from peers, not a complaint count or percentage."
-            )
 
 
 def render_recent_items(bank: dict) -> None:
@@ -1544,7 +1235,6 @@ def main() -> None:
         )
 
     st.divider()
-    render_macro_banner()
 
     with st.container(key="bank-picker"):
         bank_names = list(MOCK_BANKS.keys())
@@ -1557,15 +1247,12 @@ def main() -> None:
     st.divider()
 
     # Reading order for a risk analyst: what needs attention right now (Key
-    # Alerts), then the raw evidence (Metric Breakdown), then the model's
-    # verdict on that evidence and why it reached it side by side (Fundamentals
-    # Risk Profile + Model Feature Drivers) — conclusion and explanation stay
-    # adjacent rather than the explanation being buried further down the page.
+    # Alerts), then the model's verdict and why it reached it side by side
+    # (Fundamentals Risk Profile + Model Feature Drivers) — conclusion and
+    # explanation stay adjacent — then the raw evidence backing that verdict
+    # (Metric Breakdown).
     with st.container(border=True, key="card-alerts"):
         render_key_alerts(bank)
-
-    with st.container(border=True, key="card-metric-breakdown"):
-        render_metric_breakdown(bank)
 
     fund_col, drivers_col = st.columns(2)
     with fund_col:
@@ -1574,6 +1261,9 @@ def main() -> None:
     with drivers_col:
         with st.container(border=True, key="card-feature-drivers", height="stretch"):
             render_feature_drivers(bank)
+
+    with st.container(border=True, key="card-metric-breakdown"):
+        render_metric_breakdown(bank)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1589,40 +1279,15 @@ def main() -> None:
                     render_recent_items(bank)
 
     st.divider()
-    st.markdown('<div class="panel-title">SUPPLEMENTARY RISK SIGNALS</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-caption">Price risk and customer complaint risk — additional context signals from '
-        "the sources EDA, not yet folded into the composite fundamentals score above.</div>",
-        unsafe_allow_html=True,
-    )
-    with st.expander("📈 Price Risk  ·  💳 Customer Complaint Risk"):
-        col5, col6 = st.columns(2)
-        with col5:
-            with st.container(border=True, key="card-price", height="stretch"):
-                render_price_risk(bank)
-        with col6:
-            with st.container(border=True, key="card-complaints", height="stretch"):
-                render_complaints(bank)
-
-    st.divider()
     st.caption(
         "How to read this screen — The fundamentals score comes from a "
         "Gaussian Process classifier over Call Report features; sentiment "
         "from a BERT-based 3-class model trained on LLM-assisted labels. Key "
         "Alerts surfaces any metric outside its threshold plus non-ratio "
         "flags (e.g. open enforcement actions) — it isn't itself part of "
-        "the composite score. Price risk and Customer Complaint Risk (added "
-        "from the sources EDA) are shown as supplementary context: price is "
-        "dense (nearly all banks) and leading, complaints are "
-        "consumer-bank-only and reactive — see "
-        "coverage captions on each panel. Trend deltas and peer-percentile "
-        "lines compare each bank against an illustrative US peer group of "
-        "similar banks — real cohort definitions and computed percentiles "
-        "are a scoring-methodology decision, not made here. Sources: GDELT "
-        "DOC 2.0, SEC EDGAR (8-K/10-Q/10-K), FFIEC/FDIC unified dataset, "
-        "Fed/FDIC enforcement actions, yfinance daily prices, CFPB Consumer "
-        "Complaint Database, FRED macro series. All numbers on this page "
-        "are illustrative — concept only, not model output."
+        "the composite score. Sources: GDELT DOC "
+        "2.0, SEC EDGAR (8-K/10-Q/10-K), FFIEC/FDIC unified dataset, "
+        "Fed/FDIC enforcement actions."
     )
 
 
