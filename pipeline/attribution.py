@@ -13,7 +13,7 @@ direction material; gating at the rollup keeps both.
 
 ⚠️ The backtest depends on this. The 2020-2024 backfill comes from GKG
 matched on the title naming the bank, so those rows are ~100% self-naming
-while live rows are 6.6% — measured, 402,316 of 407,032 against 1,346 of
+while live rows are 6.5% — measured, 398,841 of 401,061 against 1,310 of
 20,286 over a healthy fortnight. Score the backfill without applying this
 gate to the live path too and the backtest reads better than production for
 reasons that have nothing to do with the model.
@@ -37,11 +37,13 @@ from pipeline import db
 #
 # The DOC API never exposed this because GDELT treats gdelt_query's "Popular"
 # as a quoted phrase against its own index; the moment we match aliases
-# ourselves, it bites. Of 21 single-word aliases across the seed this is the
-# only true English word — the rest are Amex, BofA, Citi, Schwab, Truist and
-# similar. Fix properly by flagging bpop "generic" in db/seed/banks.csv, which
-# poll_agency_rss.build_alias_index already keys off; until a re-seed lands,
-# this denylist is what protects the gate.
+# ourselves, it bites. It is the only bare English word the seed itself
+# spells out — the other single-word aliases are Amex, BofA, Citi, Schwab,
+# Truist and similar. Words that *stripping* would manufacture ("Glacier"
+# from "Glacier Bancorp") are a separate problem, handled in name_forms
+# rather than by extending this list. Fix properly by flagging bpop "generic"
+# in db/seed/banks.csv, which poll_agency_rss.build_alias_index already keys
+# off; until a re-seed lands, this denylist is what protects the gate.
 GENERIC_ALIASES = frozenset({"popular"})
 
 
@@ -69,19 +71,45 @@ CORP_SUFFIX = re.compile(
 )
 
 
-def name_forms(name: str) -> list[str]:
+def name_forms(name: str, seeded: frozenset[str] = frozenset()) -> list[str]:
     """A name and its headline form, stripped of trailing legal suffixes.
 
     Applied repeatedly, because the seed stacks them: "Citizens Bank, N.A."
     and "…Financial Group, Inc." both need two passes to reach the form a
     headline actually uses.
+
+    A stripped form collapsing to ONE token is dropped unless the seed spells
+    it out. "Bancorp" is a suffix, so stripping turns "Glacier Bancorp" into
+    "Glacier", "Hope Bancorp" into "Hope" and "U.S. Bancorp" into "U.S." —
+    words that match weather reports, soft-landing commentary and virtually
+    every US banking headline respectively. `seeded` is what saves the real
+    ones: "Citi" survives because the seed lists it as an alias, and nothing
+    else on that list is a bare English word.
     """
-    forms = []
+    forms: list[str] = []
     current = re.sub(r"^\W+|\W+$", "", name.strip())
     while current and current not in forms:
+        if forms and " " not in current and current.lower() not in seeded:
+            break  # a derived single token: too broad unless seeded
         forms.append(current)
         current = re.sub(r"^\W+|\W+$", "", CORP_SUFFIX.sub("", current))
     return forms
+
+
+def seeded_names(bank: dict) -> frozenset[str]:
+    """Every name the seed actually spells out for this bank, normalized."""
+    values = [bank.get("bank_legal_name"), bank.get("holding_name")]
+    values += list(bank.get("aliases") or [])
+    return frozenset(re.sub(r"^\W+|\W+$", "", v.strip()).lower() for v in values if v)
+
+
+def _collides(core: str, bank_id: str, others: dict[str, frozenset[str]]) -> bool:
+    """Does `core` appear as a whole word inside a different bank's name?"""
+    pattern = re.compile(r"(?<!\w)" + re.escape(core) + r"(?!\w)")
+    return any(
+        bid != bank_id and any(pattern.search(n) for n in names)
+        for bid, names in others.items()
+    )
 
 
 def build_patterns(banks: list[dict]) -> dict[str, list[re.Pattern]]:
@@ -93,20 +121,33 @@ def build_patterns(banks: list[dict]) -> dict[str, list[re.Pattern]]:
     since bare "Citi" otherwise matches "Citizens" (DESIGN, Bank attribution).
     Same convention as poll_agency_rss.build_alias_index.
     """
+    cleaned = safe_banks(banks)
+    others = {b["bank_id"]: seeded_names(b) for b in cleaned}
     out: dict[str, list[re.Pattern]] = {}
-    for b in safe_banks(banks):
+    for b in cleaned:
         # "generic"-flagged banks use the holding name only: their legal names
         # and aliases collide with unrelated banks and industry phrases
         # ("Community Bank" matched "community bank leverage ratio").
-        if b.get("notes") and "generic" in b["notes"].lower():
+        generic = bool(b.get("notes") and "generic" in b["notes"].lower())
+        if generic:
             names = [b.get("holding_name")]
         else:
             names = [b.get("bank_legal_name"), b.get("holding_name")]
             names += list(b.get("aliases") or [])
-        cores = {form.lower() for n in names if n for form in name_forms(n)}
+        seeded = seeded_names(b)
+        cores = {form.lower() for n in names if n for form in name_forms(n, seeded)}
         # Re-check after stripping: "Popular, Inc." reduces to "Popular", the
         # very word the denylist exists to keep out.
         cores -= GENERIC_ALIASES
+        # And drop any form that sits inside another bank's name. Stripping
+        # otherwise undoes the generic flag: ffbc's "First Financial Bancorp."
+        # becomes "First Financial", which is contained in ffin's "First
+        # Financial Bankshares" — the very pair the flag was introduced for.
+        # Checked against the seeded names rather than a token count, because
+        # the question is whether a real collision exists, not how long the
+        # string is: "Community Bank System" is three tokens and collides with
+        # nothing, "First Financial" is two and collides.
+        cores = {c for c in cores if not _collides(c, b["bank_id"], others)}
         patterns = [
             re.compile(r"(?<!\w)" + re.escape(c) + r"(?!\w)") for c in sorted(cores)
         ]
@@ -131,7 +172,10 @@ def counts_for_bank(title: str | None, bank_id: str, patterns: dict) -> bool:
 
 def gate_rows(rows: list[dict], patterns: dict) -> tuple[list[dict], dict]:
     """Split scored rows into attributed and not. Pure, no I/O."""
-    kept, funnel = [], Counter()
+    kept = []
+    # Seeded so the keys are total: a subset where nothing attributes is
+    # precisely when a caller reads `attributed`, and a Counter would omit it.
+    funnel = Counter({"total": 0, "attributed": 0, "unattributed": 0})
     for r in rows:
         funnel["total"] += 1
         if counts_for_bank(r.get("title"), r.get("bank_id"), patterns):
@@ -150,7 +194,7 @@ def main() -> None:
     """
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--since", default="2020-01-01")
-    ap.add_argument("--until", default="2027-01-01")
+    ap.add_argument("--until", default="2100-01-01")  # no silent truncation
     args = ap.parse_args()
 
     conn = db.connect()
@@ -159,7 +203,11 @@ def main() -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT bank_id, title,
-                          (published_at < '2026-01-01') AS is_backfill
+                          -- backfill_gkg stamps this; the DOC API backfill
+                          -- (backfill_gdelt) wrote the same source over the
+                          -- same years, so a date cutoff would count its rows
+                          -- as GKG and inflate the headline share.
+                          (meta ->> 'via' = 'gkg_backfill') AS is_backfill
                    FROM raw_item
                    WHERE source = 'gdelt'
                      AND published_at >= %(since)s AND published_at < %(until)s""",
@@ -170,8 +218,8 @@ def main() -> None:
         conn.close()
 
     for label, subset in (
-        ("backfill (GKG, 2020-2024)", [r for r in rows if r["is_backfill"]]),
-        ("live (DOC API, 2026+)", [r for r in rows if not r["is_backfill"]]),
+        ("backfill (GKG)", [r for r in rows if r["is_backfill"]]),
+        ("everything else (DOC API)", [r for r in rows if not r["is_backfill"]]),
     ):
         if not subset:
             continue

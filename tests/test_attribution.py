@@ -10,7 +10,9 @@ BANKS = [
         "bank_id": "citi",
         "bank_legal_name": "Citibank, N.A.",
         "holding_name": "Citigroup Inc.",
-        "aliases": ["Citi", "Citibank"],
+        # As the real seed spells them — "Citigroup" is listed, which is
+        # what lets the derived single token survive the stripping rule.
+        "aliases": ["Citigroup", "Citibank", "Citi"],
         "notes": None,
     },
     {
@@ -91,7 +93,13 @@ def test_legal_suffixes_are_stripped_because_headlines_drop_them():
     from pipeline.attribution import name_forms
 
     assert name_forms("Citizens Bank, N.A.") == ["Citizens Bank, N.A", "Citizens Bank"]
-    assert "Citigroup" in name_forms("Citigroup Inc.")
+    # A derived single token needs the seed to vouch for it, or "Glacier
+    # Bancorp" would hand gbci every melting-glacier headline.
+    assert name_forms("Citigroup Inc.") == ["Citigroup Inc"]
+    assert name_forms("Citigroup Inc.", frozenset({"citigroup"})) == [
+        "Citigroup Inc",
+        "Citigroup",
+    ]
 
 
 def test_stripping_cannot_resurrect_a_denylisted_word():
@@ -102,3 +110,64 @@ def test_stripping_cannot_resurrect_a_denylisted_word():
     # The suffixed form is specific enough to keep: only the bare word goes.
     assert counts_for_bank("Popular, Inc. cuts its dividend", "bpop", patterns) is True
     assert counts_for_bank("Banco Popular cuts its dividend", "bpop", patterns) is True
+
+
+def test_stripping_cannot_manufacture_a_bare_english_word():
+    """Reviewed 2026-08-14: "Bancorp" is a suffix, so stripping turned
+    "Glacier Bancorp" into "Glacier", "Hope Bancorp" into "Hope" and
+    "U.S. Bancorp" into "U.S." — the last making the gate a no-op for usb,
+    since nearly every US banking headline says "U.S."."""
+    seed = [
+        {
+            "bank_id": "gbci",
+            "bank_legal_name": "Glacier Bank",
+            "holding_name": "Glacier Bancorp, Inc.",
+            "aliases": ["Glacier Bancorp", "Glacier Bank"],
+            "notes": None,
+        },
+        {
+            "bank_id": "usb",
+            "bank_legal_name": "U.S. Bank, N.A.",
+            "holding_name": "U.S. Bancorp",
+            "aliases": ["U.S. Bancorp", "U.S. Bank"],
+            "notes": "generic",
+        },
+    ]
+    p = build_patterns(seed)
+    assert counts_for_bank("Glacier melt accelerates in Montana", "gbci", p) is False
+    assert counts_for_bank("Glacier Bancorp reports Q2", "gbci", p) is True
+    assert counts_for_bank("U.S. banks brace for CRE losses", "usb", p) is False
+    assert counts_for_bank("U.S. Bancorp cuts its dividend", "usb", p) is True
+
+
+def test_a_form_inside_another_banks_name_is_dropped():
+    """ffbc "First Financial Bancorp." strips to "First Financial", which is
+    contained in ffin "First Financial Bankshares" — the pair the seed's
+    generic flag exists for, which stripping was quietly undoing."""
+    seed = [
+        {
+            "bank_id": "ffbc",
+            "bank_legal_name": "First Financial Bank",
+            "holding_name": "First Financial Bancorp.",
+            "aliases": ["First Financial Bancorp."],
+            "notes": "generic",
+        },
+        {
+            "bank_id": "ffin",
+            "bank_legal_name": "First Financial Bank",
+            "holding_name": "First Financial Bankshares, Inc.",
+            "aliases": ["First Financial Bankshares"],
+            "notes": "generic",
+        },
+    ]
+    p = build_patterns(seed)
+    assert counts_for_bank("First Financial Bankshares beats", "ffbc", p) is False
+
+
+def test_funnel_keys_are_total_even_when_nothing_attributes():
+    """main() divides by them; a Counter that omits `attributed` turns an
+    all-unattributed window into a KeyError instead of a 0%."""
+    rows = [{"bank_id": "citi", "title": "SK Hynix raises $26.5bn"}]
+    _, funnel = gate_rows(rows, P)
+    assert funnel == {"total": 1, "attributed": 0, "unattributed": 1}
+    assert gate_rows([], P)[1] == {"total": 0, "attributed": 0, "unattributed": 0}
