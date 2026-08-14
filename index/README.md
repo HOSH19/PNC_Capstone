@@ -19,6 +19,7 @@ Parameters live in `index/config/` as versioned YAML (approved design decision).
 - Phase: 3
 - Reads: scored `raw_item` output, fundamentals tables
 - Writes: index tables to be added under `db/migrations/` (the only shared contract)
-- Owner: TBD
+- Owner: Ming (fundamentals axis) — see docs/roles/ming.md. The sentiment-side
+  document aggregation, including the bank-attribution gate, is unassigned.
 
 Nothing in this directory is executable yet; teammates own all design decisions here.
