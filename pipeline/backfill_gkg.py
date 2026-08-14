@@ -45,6 +45,7 @@ import time
 from datetime import UTC, datetime
 
 from pipeline import db
+from pipeline.attribution import safe_banks, usable_aliases
 from pipeline.poll_agency_rss import build_alias_index, match_banks
 from pipeline.poll_gdelt import normalize_title_hash
 
@@ -56,30 +57,6 @@ TABLE = "gdelt-bq.gdeltv2.gkg_partitioned"
 # bank is only missed when its title contains no longer form -- rare, and the
 # alternative is pulling thousands of false rows to filter locally.
 MIN_ALIAS_LEN = 4
-
-# Aliases that are ordinary English words. Matching them as free text makes
-# the bank swallow the corpus: "Popular" pulled 58,384 of 119,488 rows for
-# 2020 -- Netflix rankings, popular shops, popular transport -- 49% of the
-# year, at a 2% financial-vocabulary rate against 30-45% for real banks.
-# The DOC API never showed this because GDELT treats "Popular" in gdelt_query
-# as a quoted phrase against its own index, not as a substring.
-#
-# ponytail: denylist here rather than in db/seed/banks.csv, because the seed
-# only reaches this code through a re-seed of the bank table. The seed's
-# `notes` column should get "generic" for bpop too, which is what
-# poll_agency_rss.build_alias_index already keys off -- it has the same
-# exposure through its own free-text matching.
-GENERIC_ALIASES = {"popular"}
-
-
-def usable_aliases(bank: dict) -> list[str]:
-    """A bank's aliases minus the ones that are just English words."""
-    return [
-        a
-        for a in (bank.get("aliases") or [])
-        if a and a.strip().lower() not in GENERIC_ALIASES
-    ]
-
 
 QUERY = """
 SELECT
@@ -110,11 +87,6 @@ def alias_pattern(banks: list[dict]) -> str:
                 names.add(a.strip())
     # BigQuery's regex is RE2: escape, and keep the alternation deterministic.
     return "|".join(re.escape(n) for n in sorted(names))
-
-
-def safe_banks(banks: list[dict]) -> list[dict]:
-    """Banks with generic aliases stripped, for both filter and attribution."""
-    return [{**b, "aliases": usable_aliases(b)} for b in banks]
 
 
 def run_query(sql: str, project: str) -> list[dict]:
