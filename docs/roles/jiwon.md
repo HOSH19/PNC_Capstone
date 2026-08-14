@@ -194,7 +194,19 @@ noise with class scarcity and FinBERT's tone prior. Relabel first.
 
 </details>
 
-### 5. GDELT backfill, 2020–2024
+### 5. GDELT backfill, 2020–2024 ✔ done 2026-08-14
+
+Loaded 407,032 rows via `pipeline/backfill_gkg.py` — BigQuery GKG, not the
+DOC API, which rate-limits on cumulative volume and refuses a 3,000-request
+pull at any spacing. Free tier covered it (356 GiB of 1 TB).
+
+⚠️ **Tell whoever runs the backtest**: backfill rows are ~100% self-naming in
+the title, live rows 9.4%, so the attribution gate must be applied to both or
+the backtest reads better than production for reasons unrelated to the model.
+See `scoring/DESIGN.md` decision log 2026-08-14.
+
+<details><summary>Original task description</summary>
+
 
 Measured problem: our distress events run 2017–2024 and the most recent is
 2024-12-31, while the GDELT corpus starts 2026-04-13. **Zero overlap** — the
@@ -210,6 +222,8 @@ backtest has no scorable history without this.
   is ~15 hours, so chunk it across Actions jobs — the per-job limit is 6h
 - **These rows are not labeled.** The fine-tuned FinBERT scores them on CPU.
   Backfill volume does not touch the Kaggle labeling budget at all
+
+</details>
 
 ## What I do not own
 
