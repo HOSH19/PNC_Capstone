@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 
 from pipeline import db
 from pipeline.http import throttled_get
+from pipeline.poll_fdic_enforcement import build_matcher
 
 
 SEARCH_URL = "https://apps.occ.gov/EASearch/Search/Table"
@@ -22,6 +23,7 @@ BASE_URL = "https://apps.occ.gov"
 
 PAGE_SIZE = 10
 THROTTLE_S = 2.0
+MAX_PAGES = 500  # ~5k rows/query; guard runaway pagination
 
 
 def clean(value: str | None) -> str:
@@ -157,6 +159,12 @@ def fetch_all(query: str) -> list[dict]:
             break
 
         page += 1
+        if page >= MAX_PAGES:
+            print(
+                f"WARNING: hit MAX_PAGES={MAX_PAGES} for {query!r}",
+                file=sys.stderr,
+            )
+            break
 
     return results
 
@@ -233,6 +241,7 @@ def main() -> None:
     conn = db.connect()
 
     try:
+        match = build_matcher(db.get_live_banks(conn))
         for bank in db.get_live_banks(conn):
             bank_id = bank["bank_id"]
 
@@ -243,6 +252,8 @@ def main() -> None:
                     print(f"Searching OCC: {query}")
 
                     for action in fetch_all(query):
+                        if match(action["institution"]) != bank_id:
+                            continue
                         actions[external_id(action)] = action
 
                 rows = [
@@ -278,6 +289,20 @@ def main() -> None:
             not failed,
         )
 
+    except Exception:
+        try:
+            conn.rollback()
+            db.write_heartbeat(
+                conn,
+                "poll_occ_enforcement",
+                seen,
+                inserted,
+                time.monotonic() - started,
+                False,
+            )
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
 

@@ -12,12 +12,16 @@ python3 evals/build_distress_labels_full.py --verify-seed
 python3 evals/ratio_logit/train_score.py
 
 # 2b. Engineered HGB / XGB (v2)
+pip install -r evals/ratio_logit/requirements.txt
 python3 evals/ratio_logit/train_score_boost.py
 
-# 3. Backtest (full labels; harness dedupes score keys)
-python3 evals/backtest.py \
+# 3. Fair intersected backtest (same test keys for every model)
+python3 evals/backtest.py --intersect --budget auto \
+  --labels evals/items/distress_bank_quarter_full.csv \
   --scores index/data/scores_hgb_eng_v2.csv \
-  --labels evals/items/distress_bank_quarter_full.csv
+  --scores index/data/scores_xgb_eng_v2.csv \
+  --scores index/data/scores_gp50_fixed_v1.csv \
+  --scores index/data/scores_ratios_logit_v2.csv
 ```
 
 Fair comparison writeup: [`evals/reports/2026-08-07_fair_vs_gp50.md`](../reports/2026-08-07_fair_vs_gp50.md).

@@ -37,7 +37,7 @@ useless. Report only:
 |---|---|
 | **PR-AUC** | Area under the precision–recall curve over test bank-quarters, ranking by score. Prefer sklearn `average_precision_score`. |
 | **Precision@k (pooled)** | Among the top `k` scored bank-quarters in the **entire test set**, fraction with `distress_within_4q = 1`. Default **k = 50**. |
-| **Recall@budget** | Each test quarter, alert the top **B = 10** banks by score. Recall = (# alerted positives) / (# positives in that quarter), then **micro-average** over quarters that have ≥1 positive. Quarters with zero positives are skipped for this metric (still included in PR-AUC / precision@k). |
+| **Recall@budget** | Each test quarter, alert the top **B** banks by score. Recall = (# alerted positives) / (# positives in that quarter), then **micro-average** over quarters that have ≥1 positive. Quarters with zero positives are skipped for this metric (still included in PR-AUC / precision@k). Default **B = 10** on the 104-bank seed panel. On the full filer panel use **`--budget auto`**, which scales 10/104 to the median test-quarter size (~441). |
 | **Baseline** | Always report the same metrics for a **random score** (fixed seed) and for the **naive tier-1 inverted** control, so a model number is interpretable. |
 
 Do **not** report accuracy, ROC-AUC alone (can look strong under imbalance), or
@@ -104,6 +104,12 @@ python3 evals/backtest.py \
   --test-end 2024-12-31 \
   --budget 10 \
   --precision-at 50
+
+# Fair multi-model table (shared test keys):
+python3 evals/backtest.py --intersect --budget auto \
+  --labels evals/items/distress_bank_quarter_full.csv \
+  --scores index/data/scores_hgb_eng_v2.csv \
+  --scores index/data/scores_gp50_fixed_v1.csv
 ```
 
 Print a small markdown table to stdout (and optionally
@@ -123,7 +129,7 @@ Every backtest write-up must include:
 2. Train/test cut dates and row / positive counts  
 3. PR-AUC, precision@50, recall@budget=10 (micro)  
 4. Same three metrics for random + naive −tier1  
-5. Confirmation that combined runs used the **intersection** window  
+5. Confirmation that combined runs used the **intersection** window (`--intersect` when comparing multiple score files)
 
 ---
 

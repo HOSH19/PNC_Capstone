@@ -37,9 +37,9 @@ CALL = ROOT / "unified_ffiec_fdic_dataset" / "tables" / "fact_call_report.csv"
 SEED_LABELS = ROOT / "evals" / "items" / "distress_bank_quarter.csv"
 OUT = ROOT / "evals" / "items" / "distress_bank_quarter_full.csv"
 
-# A row's distress_within_4q needs LOOKAHEAD_QUARTERS forward event quarters.
-# The final quarters of any extract cannot close, so positives are silently 0 —
-# drop them (same policy as Ming's features.py DROP_UNCLOSED).
+# distress_within_4q on quarter T requires observing events through T+4.
+# Drop each bank's last LOOKAHEAD_QUARTERS rows — covers both the global
+# dataset end and banks that exit the panel early (merger, closure, etc.).
 DROP_UNCLOSED = True
 
 
@@ -64,21 +64,29 @@ def load_all_quarters(seed_ids: dict[int, str]) -> list[dict]:
     return rows
 
 
-def drop_unclosed(rows: list[dict]) -> list[dict]:
-    """Remove the last LOOKAHEAD_QUARTERS distinct report dates panel-wide."""
-    if not DROP_UNCLOSED or not rows:
-        return rows
-    qs = sorted({r["quarter_end_date"] for r in rows})
-    if len(qs) <= LOOKAHEAD_QUARTERS:
-        return rows
-    keep = set(qs[:-LOOKAHEAD_QUARTERS])
-    dropped = sorted(set(qs) - keep)
-    out = [r for r in rows if r["quarter_end_date"] in keep]
+def drop_unclosed_per_bank(by_bank: dict[int, list[dict]]) -> tuple[list[dict], int]:
+    """Remove each bank's last LOOKAHEAD_QUARTERS rows (unobservable future)."""
+    if not DROP_UNCLOSED:
+        flat = [r for cert in sorted(by_bank) for r in by_bank[cert]]
+        return flat, 0
+
+    kept_by_bank: dict[int, list[dict]] = {}
+    dropped_rows = 0
+    for cert in sorted(by_bank):
+        bank_rows = by_bank[cert]
+        if len(bank_rows) <= LOOKAHEAD_QUARTERS:
+            dropped_rows += len(bank_rows)
+            continue
+        kept_by_bank[cert] = bank_rows[:-LOOKAHEAD_QUARTERS]
+        dropped_rows += LOOKAHEAD_QUARTERS
+
+    flat = [r for cert in sorted(kept_by_bank) for r in kept_by_bank[cert]]
     print(
-        f"  dropped unclosed quarters {dropped}: "
-        f"{len(rows):,} -> {len(out):,} rows"
+        f"  dropped {dropped_rows:,} unclosed bank-quarters "
+        f"({len(by_bank):,} certs -> {len(kept_by_bank):,} with closed labels): "
+        f"{sum(len(r) for r in by_bank.values()):,} -> {len(flat):,} rows"
     )
-    return out
+    return flat, dropped_rows
 
 
 def build_rows(seed_ids: dict[int, str]) -> list[dict]:
@@ -88,9 +96,8 @@ def build_rows(seed_ids: dict[int, str]) -> list[dict]:
         by_bank[r["fdic_cert_number"]].append(r)
     for bank_rows in by_bank.values():
         label_bank(bank_rows)
-    # Flatten in stable order, then drop panel-wide unclosed tails.
-    flat = [r for cert in sorted(by_bank) for r in by_bank[cert]]
-    return drop_unclosed(flat)
+    flat, _ = drop_unclosed_per_bank(by_bank)
+    return flat
 
 
 def write_csv(rows: list[dict], path: Path) -> None:

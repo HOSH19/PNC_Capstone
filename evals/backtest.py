@@ -6,8 +6,15 @@ evals/items/distress_bank_quarter.csv per evals/backtest_protocol.md.
 Smoke (run A — naive −tier1 + random baseline):
   python3 evals/backtest.py --smoke
 
-Score CSV:
+Single score CSV:
   python3 evals/backtest.py --scores path/to/scores.csv
+
+Fair multi-model comparison (same test keys in every row):
+  python3 evals/backtest.py --intersect \\
+    --scores index/data/scores_hgb_eng_v2.csv \\
+    --scores index/data/scores_gp50_fixed_v1.csv \\
+    --labels evals/items/distress_bank_quarter_full.csv \\
+    --budget auto
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ REPORTS = ROOT / "evals" / "reports"
 SPLIT_DATE = date(2021, 12, 31)
 TEST_END = date(2024, 12, 31)
 BUDGET = 10
+SEED_PANEL_BANKS = 104
 PRECISION_AT = 50
 RANDOM_SEED = 0
 
@@ -225,6 +233,34 @@ def join_test(
     return joined
 
 
+def median_quarter_size(rows: list[dict]) -> int:
+    by_q: dict[date, int] = defaultdict(int)
+    for r in rows:
+        by_q[r["quarter_end_date"]] += 1
+    if not by_q:
+        return SEED_PANEL_BANKS
+    sizes = sorted(by_q.values())
+    return sizes[len(sizes) // 2]
+
+
+def resolve_budget(rows: list[dict], budget: str) -> int:
+    """Resolve alert budget; 'auto' scales seed-panel B=10/104 to test panel size."""
+    if budget != "auto":
+        return int(budget)
+    med = median_quarter_size(rows)
+    return max(BUDGET, round(BUDGET * med / SEED_PANEL_BANKS))
+
+
+def filter_intersection(
+    rows: list[dict], keys: set[tuple[int, date]]
+) -> list[dict]:
+    return [
+        r
+        for r in rows
+        if (r["fdic_cert_number"], r["quarter_end_date"]) in keys
+    ]
+
+
 def evaluate(
     rows: list[dict], budget: int, precision_k: int
 ) -> dict:
@@ -261,20 +297,35 @@ def render_report(
     split_date: date,
     test_end: date,
     labels_path: Path,
+    mode: str = "smoke",
+    intersect_keys: int | None = None,
 ) -> str:
+    title = {
+        "smoke": "Backtest report — harness smoke (run A)",
+        "scores": "Backtest report — single model",
+        "intersect": "Backtest report — intersected test keys",
+    }.get(mode, "Backtest report")
     lines = [
-        "# Backtest report — harness smoke (run A)\n",
+        f"# {title}\n",
         f"Labels: `{labels_path.relative_to(ROOT)}`  ",
         f"Split: train ≤ `{split_date.isoformat()}`, "
         f"test `{split_date.isoformat()}` < date ≤ `{test_end.isoformat()}`  ",
         "Target: `distress_within_4q`. Score: higher = riskier.\n",
-        "## Results\n",
-        "| model_version | n_test | n_pos | PR-AUC | "
-        f"precision@{results[0]['precision_k'] if results else PRECISION_AT} | "
-        f"recall@budget={results[0]['budget'] if results else BUDGET} "
-        "(micro) | recall detail |",
-        "|---|---:|---:|---:|---:|---:|---|",
     ]
+    if intersect_keys is not None:
+        lines.append(
+            f"Intersect: **{intersect_keys:,}** bank-quarters scored by every model.\n"
+        )
+    lines.extend(
+        [
+            "## Results\n",
+            "| model_version | n_test | n_pos | PR-AUC | "
+            f"precision@{results[0]['precision_k'] if results else PRECISION_AT} | "
+            f"recall@budget={results[0]['budget'] if results else BUDGET} "
+            "(micro) | recall detail |",
+            "|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
     for r in results:
         detail = (
             f"{r['recall_alerted']}/{r['recall_total_pos']} pos "
@@ -290,15 +341,30 @@ def render_report(
     lines.append("- [x] model_version and score definition stated")
     lines.append("- [x] train/test cuts and positive counts stated")
     lines.append("- [x] PR-AUC, precision@k, recall@budget reported")
-    lines.append("- [x] random + naive −tier1 both present")
+    if mode == "smoke":
+        lines.append("- [x] random + naive −tier1 both present")
+    else:
+        lines.append("- [ ] random + naive −tier1 (score/intersect runs only)")
+    if mode == "intersect":
+        lines.append(
+            f"- [x] intersected test keys ({intersect_keys:,} bank-quarters)"
+        )
+    else:
+        lines.append("- [ ] intersected keys (use --intersect for fair multi-model table)")
     lines.append("- [ ] combined run — blocked until sentiment scores exist\n")
     lines.append("## Notes\n")
-    lines.append(
-        "Naive score is `risk = −tier1_capital_ratio` from "
-        "`fact_call_report`. If naive is not clearly above random on "
-        "PR-AUC / recall@budget, treat the harness as suspect before "
-        "grading Ming's GP.\n"
-    )
+    if mode == "smoke":
+        lines.append(
+            "Naive score is `risk = −tier1_capital_ratio` from "
+            "`fact_call_report`. If naive is not clearly above random on "
+            "PR-AUC / recall@budget, treat the harness as suspect before "
+            "grading Ming's GP.\n"
+        )
+    elif mode == "intersect":
+        lines.append(
+            "Rows restricted to `(fdic_cert_number, quarter_end_date)` keys "
+            "present in every `--scores` file after the test-window join.\n"
+        )
     return "\n".join(lines)
 
 
@@ -306,24 +372,24 @@ def run_smoke(args: argparse.Namespace) -> int:
     labels = load_labels(Path(args.labels))
     naive = build_naive_tier1_scores(labels)
     random_scores = build_random_scores(naive, seed=args.seed)
+    split_date = parse_date(args.split_date)
+    test_end = parse_date(args.test_end)
 
     results = []
     for scores in (naive, random_scores):
-        test = join_test(
-            scores, labels, parse_date(args.split_date), parse_date(args.test_end)
-        )
+        test = join_test(scores, labels, split_date, test_end)
         if not test:
             print("ERROR: no test rows after join/filter", file=sys.stderr)
             return 1
-        results.append(
-            evaluate(test, budget=args.budget, precision_k=args.precision_at)
-        )
+        budget = resolve_budget(test, args.budget)
+        results.append(evaluate(test, budget=budget, precision_k=args.precision_at))
 
     report = render_report(
         results,
-        split_date=parse_date(args.split_date),
-        test_end=parse_date(args.test_end),
+        split_date=split_date,
+        test_end=test_end,
         labels_path=Path(args.labels),
+        mode="smoke",
     )
     print(report)
 
@@ -337,23 +403,68 @@ def run_smoke(args: argparse.Namespace) -> int:
 
 def run_scores(args: argparse.Namespace) -> int:
     labels_path = Path(args.labels).expanduser().resolve()
-    scores_path = Path(args.scores).expanduser().resolve()
+    scores_path = Path(args.scores[0]).expanduser().resolve()
     labels = load_labels(labels_path)
     scores = load_scores_csv(scores_path)
-    test = join_test(
-        scores, labels, parse_date(args.split_date), parse_date(args.test_end)
-    )
+    split_date = parse_date(args.split_date)
+    test_end = parse_date(args.test_end)
+    test = join_test(scores, labels, split_date, test_end)
     if not test:
         print("ERROR: no test rows after join/filter", file=sys.stderr)
         return 1
-    result = evaluate(test, budget=args.budget, precision_k=args.precision_at)
+    budget = resolve_budget(test, args.budget)
+    result = evaluate(test, budget=budget, precision_k=args.precision_at)
     report = render_report(
         [result],
-        split_date=parse_date(args.split_date),
-        test_end=parse_date(args.test_end),
+        split_date=split_date,
+        test_end=test_end,
         labels_path=labels_path,
+        mode="scores",
     )
-    # Single-model report still uses the multi-model table shape.
+    print(report)
+    return 0
+
+
+def run_intersect(args: argparse.Namespace) -> int:
+    labels_path = Path(args.labels).expanduser().resolve()
+    labels = load_labels(labels_path)
+    split_date = parse_date(args.split_date)
+    test_end = parse_date(args.test_end)
+    score_paths = [Path(p).expanduser().resolve() for p in args.scores]
+
+    joined_sets: list[list[dict]] = []
+    key_sets: list[set[tuple[int, date]]] = []
+    for path in score_paths:
+        test = join_test(load_scores_csv(path), labels, split_date, test_end)
+        if not test:
+            print(f"ERROR: no test rows for {path.name}", file=sys.stderr)
+            return 1
+        joined_sets.append(test)
+        key_sets.append(
+            {(r["fdic_cert_number"], r["quarter_end_date"]) for r in test}
+        )
+
+    common = set.intersection(*key_sets)
+    if not common:
+        print("ERROR: score files share no test keys", file=sys.stderr)
+        return 1
+
+    budget = resolve_budget(joined_sets[0], args.budget)
+    results = []
+    for test in joined_sets:
+        filtered = filter_intersection(test, common)
+        results.append(
+            evaluate(filtered, budget=budget, precision_k=args.precision_at)
+        )
+
+    report = render_report(
+        results,
+        split_date=split_date,
+        test_end=test_end,
+        labels_path=labels_path,
+        mode="intersect",
+        intersect_keys=len(common),
+    )
     print(report)
     return 0
 
@@ -365,12 +476,26 @@ def main() -> int:
         action="store_true",
         help="Run A: naive −tier1 vs random on the locked test split",
     )
-    p.add_argument("--scores", type=str, help="Score CSV (fdic_cert_number, "
-                   "quarter_end_date, risk_score, model_version)")
+    p.add_argument(
+        "--scores",
+        action="append",
+        metavar="PATH",
+        help="Score CSV (repeat with --intersect for fair multi-model table)",
+    )
+    p.add_argument(
+        "--intersect",
+        action="store_true",
+        help="Evaluate every --scores file on the same test keys",
+    )
     p.add_argument("--labels", type=str, default=str(DEFAULT_LABELS))
     p.add_argument("--split-date", type=str, default=SPLIT_DATE.isoformat())
     p.add_argument("--test-end", type=str, default=TEST_END.isoformat())
-    p.add_argument("--budget", type=int, default=BUDGET)
+    p.add_argument(
+        "--budget",
+        default=str(BUDGET),
+        help=f"Alerts per test quarter (default {BUDGET}), or 'auto' to scale "
+        f"from seed-panel {BUDGET}/{SEED_PANEL_BANKS}",
+    )
     p.add_argument("--precision-at", type=int, default=PRECISION_AT)
     p.add_argument("--seed", type=int, default=RANDOM_SEED)
     p.add_argument(
@@ -382,7 +507,13 @@ def main() -> int:
 
     if args.smoke:
         return run_smoke(args)
+    if args.intersect:
+        if not args.scores or len(args.scores) < 2:
+            p.error("--intersect requires two or more --scores PATH arguments")
+        return run_intersect(args)
     if args.scores:
+        if len(args.scores) != 1:
+            p.error("provide one --scores PATH, or use --intersect for several")
         return run_scores(args)
     p.error("provide --smoke or --scores PATH")
     return 2
