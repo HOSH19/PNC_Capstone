@@ -1,0 +1,83 @@
+name: backfill_gdelt
+
+# One-off historical backfill (docs/roles/jiwon.md §5), NOT a poller: the
+# live 6-hourly matrix in ingest.yml stays untouched. Manual trigger only.
+#
+# Sizing: the original estimate of ~21 requests per bank assumed one request
+# per window. Measured 2026-08-12, it is not: fetch_window bisects whenever a
+# window returns GDELT's 250-row cap, and a high-volume bank spent 12 minutes
+# on five years without finishing. Budget on requests, not windows, and check
+# a run's log before assuming a pass completed the corpus.
+#
+# Each job stops itself at --budget-min on a window boundary with its
+# watermarks committed. Re-running this workflow with the same inputs resumes;
+# finished banks cost zero requests, so repeated passes converge.
+#
+# The 25 s spacing is per process, and the first attempt ran the four slices
+# in parallel on the assumption that four runners are four independent IPs.
+# Measured 2026-08-12: they are not treated as such. Three of four slices died
+# on 429 after exhausting retries, at an effective 6.25 s aggregate spacing --
+# tighter than the 8 s that already 429'd in the sizing probe. max-parallel is
+# 1 for that reason; do not raise it, and do not lower THROTTLE_S.
+#
+# Sequential means wall clock is the whole ~15 h+ rather than a quarter of it,
+# so this workflow is meant to be run repeatedly. Each run resumes where the
+# last stopped and finished banks cost zero requests, so re-dispatching until
+# the log stops saying "incomplete" is the intended operating procedure.
+
+on:
+  # Every 6 h at full budget. This used to be offset to 03/09/15/21 to dodge
+  # ingest.yml's polls, but poll_gdelt is paused for the duration (see the
+  # note in that file), so there is nothing left to share GDELT with and the
+  # backfill takes the whole window. 300 min against a 360 min job cap.
+  #
+  # When poll_gdelt goes back, this must go back to the offset schedule and a
+  # 150 min budget, or the two will 429 each other again.
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "first day, inclusive"
+        default: "2020-01-01"
+      end:
+        description: "last day, exclusive"
+        default: "2025-01-01"
+      budget_min:
+        description: "stop cleanly after this many minutes (Actions caps at 360)"
+        default: "300"
+      throttle_s:
+        description: "seconds between GDELT requests"
+        default: "60"
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    # Above --budget-min, so the script stops itself on a window boundary with
+    # its watermark committed rather than being killed mid-window. Actions
+    # caps a job at 360.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # One process over all banks. The bank slicing exists for parallelism,
+      # and parallelism is what 429'd, so a matrix here would only serialise
+      # into four jobs sharing one time budget between them.
+      - name: Backfill
+        run: |
+          python -m pipeline.backfill_gdelt \
+            --start "${{ inputs.start || '2020-01-01' }}" \
+            --end "${{ inputs.end || '2025-01-01' }}" \
+            --budget-min "${{ inputs.budget_min || '300' }}" \
+            --throttle-s "${{ inputs.throttle_s || '60' }}"
