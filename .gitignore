@@ -23,6 +23,7 @@ index/data/*
 !index/data/scores_gp50_fixed_v1.csv
 !index/data/bank_index_score_backfill.parquet
 !index/data/bank_index_feature_backfill.parquet
+!index/data/sentiment_quarter_backfill.csv
 # rival score files from PR #14 live in the same dir
 !index/data/scores_hgb_eng_v2.csv
 !index/data/scores_xgb_eng_v2.csv
