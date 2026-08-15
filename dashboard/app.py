@@ -546,7 +546,12 @@ def compute_status(bank: dict) -> str:
     sent_negative = sentiment["label"] == "Negative"
     if score is not None and score < IMMINENT_CRITICAL_SCORE and sent_negative:
         return "Imminent Disruption"
-    if score is not None and score <= 80 and sent_negative:
+    # Fundamentals floor: score <= 80 is Elevated Risk regardless of
+    # sentiment. Without it, calm news rated a distressed bank BETTER than
+    # no sentiment read at all (the None branch above already gives the
+    # same score Elevated Risk) — and banks are often quiet in the news
+    # right before trouble. Same rule as pipeline/combine_axes.py.
+    if score is not None and score <= 80:
         return "Elevated Risk"
     if sent_negative or (score is not None and score < 90):
         return "Watch"
