@@ -72,14 +72,22 @@ def to_score_row(raw_id: int, label: str, probs: dict, model_version: str) -> di
     }
 
 
-def fetch_pending(conn, limit: int) -> list[dict]:
+def fetch_pending(conn, limit: int, newest_first: bool = False) -> list[dict]:
+    """Oldest first by default; newest first for the incremental job.
+
+    The queue is FIFO by id and the 2020-2024 backfill holds the low ids, so
+    a CPU run draining oldest-first would chew historical rows forever and
+    never reach today's. The incremental job wants the opposite end; the
+    backlog job wants this end, and both leave the other's rows pending.
+    """
+    order = "DESC" if newest_first else "ASC"
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT id, source, title, text_excerpt, meta
-               FROM raw_item
-               WHERE finbert_status = 'pending'
-               ORDER BY id
-               LIMIT %(limit)s""",
+            f"""SELECT id, source, title, text_excerpt, meta
+                FROM raw_item
+                WHERE finbert_status = 'pending'
+                ORDER BY id {order}
+                LIMIT %(limit)s""",
             {"limit": limit},
         )
         return cur.fetchall()
@@ -183,7 +191,7 @@ def main() -> None:
     try:
         while scored + skipped_n < args.limit:
             take = min(args.batch, args.limit - scored - skipped_n)
-            rows = fetch_pending(conn, take)
+            rows = fetch_pending(conn, take, args.newest_first)
             if not rows:
                 break
             scorable, skipped = triage(rows)

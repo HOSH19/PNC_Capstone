@@ -62,3 +62,35 @@ def test_probs_are_serialised_for_jsonb_not_dropped():
     assert row["raw_item_id"] == 7 and row["label"] == "negative"
     assert json.loads(row["probs"])["negative"] == 0.61
     assert row["model_version"] == "finbert-ft-2026-08-09"
+
+
+def test_incremental_job_drains_the_newest_end_of_the_queue():
+    """The 2020-2024 backfill owns the low ids, so an oldest-first CPU run
+    would chew historical rows for hours and never reach today's."""
+    import re
+
+    from pipeline import score_finbert
+
+    seen = {}
+
+    class FakeCur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            seen["sql"] = sql
+
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCur()
+
+    score_finbert.fetch_pending(FakeConn(), 10, newest_first=True)
+    assert re.search(r"ORDER BY id\s+DESC", seen["sql"])
+    score_finbert.fetch_pending(FakeConn(), 10)
+    assert re.search(r"ORDER BY id\s+ASC", seen["sql"])
