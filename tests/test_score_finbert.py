@@ -64,6 +64,32 @@ def test_probs_are_serialised_for_jsonb_not_dropped():
     assert row["model_version"] == "finbert-ft-2026-08-09"
 
 
+def test_cli_accepts_the_flags_the_workflow_passes():
+    """The unit tests exercise fetch_pending directly, so a flag used by
+    main() but missing from argparse only surfaces in Actions. Parse happens
+    before the torch import, so 'unrecognized arguments' is the one failure
+    this run must not produce."""
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pipeline.score_finbert",
+            "--model-dir",
+            "/nonexistent",
+            "--newest-first",
+            "--limit",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0
+    assert "unrecognized arguments" not in r.stderr
+
+
 def test_incremental_job_drains_the_newest_end_of_the_queue():
     """The 2020-2024 backfill owns the low ids, so an oldest-first CPU run
     would chew historical rows for hours and never reach today's."""

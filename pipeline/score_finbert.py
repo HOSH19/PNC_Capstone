@@ -167,6 +167,12 @@ def main() -> None:
         help="rows to drain this run; the queue survives restarts",
     )
     ap.add_argument(
+        "--newest-first",
+        action="store_true",
+        help="drain the newest end of the queue; the incremental job's mode, "
+        "since the backlog owns the low ids",
+    )
+    ap.add_argument(
         "--batch",
         type=int,
         default=BATCH,
