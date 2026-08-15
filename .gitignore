@@ -15,6 +15,20 @@ docs/design-decisions*.md
 labeling_batch_*.csv
 labels_*.csv
 
+# Ming local working notes (never commit)
+index/v1_archive/
+index/v2_rework/
+index/v3/
+index/data/
+!index/data/scores_gp50_fixed_v1.csv
+# rival score files from PR #14 live in the same dir
+!index/data/scores_hgb_eng_v2.csv
+!index/data/scores_xgb_eng_v2.csv
+!index/data/scores_ratios_logit_v2.csv
+
+# Chinese drafts — English versions are the committed ones
+*_zh.md
+
 # FinBERT training-set exports (never commit)
 finbert_*.csv
 

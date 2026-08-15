@@ -1,0 +1,151 @@
+fdic_cert_number,quarter_end_date,feature_name,display_name,value,is_imputed,threshold_text,status
+628,2025-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.0,false,>= 9.0,within_range
+628,2025-03-31,liquidity_ratio,Liquidity ratio %,5.5,false,2.0 - 7.0,within_range
+628,2025-03-31,npl_ratio,NPL ratio %,0.7,false,<= 2.0,within_range
+628,2025-03-31,fee_income_ratio,Fee income / revenue %,30.0,false,>= 25.0,within_range
+628,2025-03-31,cre_to_capital,CRE / total capital %,62.0,false,<= 120,within_range
+628,2025-06-30,tier1_capital_ratio,Tier 1 capital ratio %,13.13,false,>= 9.0,within_range
+628,2025-06-30,liquidity_ratio,Liquidity ratio %,5.55,false,2.0 - 7.0,within_range
+628,2025-06-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+628,2025-06-30,fee_income_ratio,Fee income / revenue %,30.3,false,>= 25.0,within_range
+628,2025-06-30,cre_to_capital,CRE / total capital %,62.62,false,<= 120,within_range
+628,2025-09-30,tier1_capital_ratio,Tier 1 capital ratio %,13.26,false,>= 9.0,within_range
+628,2025-09-30,liquidity_ratio,Liquidity ratio %,5.61,false,2.0 - 7.0,within_range
+628,2025-09-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+628,2025-09-30,fee_income_ratio,Fee income / revenue %,30.6,false,>= 25.0,within_range
+628,2025-09-30,cre_to_capital,CRE / total capital %,63.24,false,<= 120,within_range
+628,2025-12-31,tier1_capital_ratio,Tier 1 capital ratio %,13.39,false,>= 9.0,within_range
+628,2025-12-31,liquidity_ratio,Liquidity ratio %,5.67,false,2.0 - 7.0,within_range
+628,2025-12-31,npl_ratio,NPL ratio %,0.68,false,<= 2.0,within_range
+628,2025-12-31,fee_income_ratio,Fee income / revenue %,30.9,false,>= 25.0,within_range
+628,2025-12-31,cre_to_capital,CRE / total capital %,63.86,false,<= 120,within_range
+628,2026-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.52,false,>= 9.0,within_range
+628,2026-03-31,liquidity_ratio,Liquidity ratio %,5.72,false,2.0 - 7.0,within_range
+628,2026-03-31,npl_ratio,NPL ratio %,0.67,false,<= 2.0,within_range
+628,2026-03-31,fee_income_ratio,Fee income / revenue %,31.2,false,>= 25.0,within_range
+628,2026-03-31,cre_to_capital,CRE / total capital %,64.48,false,<= 120,within_range
+3511,2025-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.0,false,>= 9.0,within_range
+3511,2025-03-31,liquidity_ratio,Liquidity ratio %,5.5,false,2.0 - 7.0,within_range
+3511,2025-03-31,npl_ratio,NPL ratio %,0.7,false,<= 2.0,within_range
+3511,2025-03-31,fee_income_ratio,Fee income / revenue %,30.0,false,>= 25.0,within_range
+3511,2025-03-31,cre_to_capital,CRE / total capital %,62.0,false,<= 120,within_range
+3511,2025-06-30,tier1_capital_ratio,Tier 1 capital ratio %,13.13,false,>= 9.0,within_range
+3511,2025-06-30,liquidity_ratio,Liquidity ratio %,5.55,false,2.0 - 7.0,within_range
+3511,2025-06-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+3511,2025-06-30,fee_income_ratio,Fee income / revenue %,30.3,false,>= 25.0,within_range
+3511,2025-06-30,cre_to_capital,CRE / total capital %,62.62,false,<= 120,within_range
+3511,2025-09-30,tier1_capital_ratio,Tier 1 capital ratio %,13.26,false,>= 9.0,within_range
+3511,2025-09-30,liquidity_ratio,Liquidity ratio %,5.61,false,2.0 - 7.0,within_range
+3511,2025-09-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+3511,2025-09-30,fee_income_ratio,Fee income / revenue %,30.6,false,>= 25.0,within_range
+3511,2025-09-30,cre_to_capital,CRE / total capital %,63.24,false,<= 120,within_range
+3511,2025-12-31,tier1_capital_ratio,Tier 1 capital ratio %,9.89,false,>= 9.0,near_threshold
+3511,2025-12-31,liquidity_ratio,Liquidity ratio %,2.47,false,2.0 - 7.0,near_threshold
+3511,2025-12-31,npl_ratio,NPL ratio %,1.79,false,<= 2.0,near_threshold
+3511,2025-12-31,fee_income_ratio,Fee income / revenue %,26.57,false,>= 25.0,near_threshold
+3511,2025-12-31,cre_to_capital,CRE / total capital %,115.36,false,<= 120,near_threshold
+3511,2026-03-31,tier1_capital_ratio,Tier 1 capital ratio %,9.98,false,>= 9.0,near_threshold
+3511,2026-03-31,liquidity_ratio,Liquidity ratio %,2.5,false,2.0 - 7.0,near_threshold
+3511,2026-03-31,npl_ratio,NPL ratio %,1.78,false,<= 2.0,near_threshold
+3511,2026-03-31,fee_income_ratio,Fee income / revenue %,26.83,false,>= 25.0,near_threshold
+3511,2026-03-31,cre_to_capital,CRE / total capital %,116.48,false,<= 120,near_threshold
+57512,2025-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.0,false,>= 9.0,within_range
+57512,2025-03-31,liquidity_ratio,Liquidity ratio %,5.5,false,2.0 - 7.0,within_range
+57512,2025-03-31,npl_ratio,NPL ratio %,0.7,false,<= 2.0,within_range
+57512,2025-03-31,fee_income_ratio,Fee income / revenue %,30.0,false,>= 25.0,within_range
+57512,2025-03-31,cre_to_capital,CRE / total capital %,62.0,false,<= 120,within_range
+57512,2025-06-30,tier1_capital_ratio,Tier 1 capital ratio %,13.13,false,>= 9.0,within_range
+57512,2025-06-30,liquidity_ratio,Liquidity ratio %,5.55,false,2.0 - 7.0,within_range
+57512,2025-06-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+57512,2025-06-30,fee_income_ratio,Fee income / revenue %,30.3,false,>= 25.0,within_range
+57512,2025-06-30,cre_to_capital,CRE / total capital %,62.62,false,<= 120,within_range
+57512,2025-09-30,tier1_capital_ratio,Tier 1 capital ratio %,9.79,false,>= 9.0,near_threshold
+57512,2025-09-30,liquidity_ratio,Liquidity ratio %,2.45,false,2.0 - 7.0,near_threshold
+57512,2025-09-30,npl_ratio,NPL ratio %,1.81,false,<= 2.0,near_threshold
+57512,2025-09-30,fee_income_ratio,Fee income / revenue %,26.32,false,>= 25.0,near_threshold
+57512,2025-09-30,cre_to_capital,CRE / total capital %,114.24,false,<= 120,near_threshold
+57512,2025-12-31,tier1_capital_ratio,Tier 1 capital ratio %,9.89,false,>= 9.0,near_threshold
+57512,2025-12-31,liquidity_ratio,Liquidity ratio %,2.47,false,2.0 - 7.0,near_threshold
+57512,2025-12-31,npl_ratio,NPL ratio %,1.79,false,<= 2.0,near_threshold
+57512,2025-12-31,fee_income_ratio,Fee income / revenue %,26.57,false,>= 25.0,near_threshold
+57512,2025-12-31,cre_to_capital,CRE / total capital %,115.36,false,<= 120,near_threshold
+57512,2026-03-31,tier1_capital_ratio,Tier 1 capital ratio %,8.74,false,>= 9.0,breach
+57512,2026-03-31,liquidity_ratio,Liquidity ratio %,1.66,false,2.0 - 7.0,breach
+57512,2026-03-31,npl_ratio,NPL ratio %,2.78,false,<= 2.0,breach
+57512,2026-03-31,fee_income_ratio,Fee income / revenue %,22.88,false,>= 25.0,breach
+57512,2026-03-31,cre_to_capital,CRE / total capital %,143.52,false,<= 120,breach
+2270,2025-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.0,false,>= 9.0,within_range
+2270,2025-03-31,liquidity_ratio,Liquidity ratio %,5.5,false,2.0 - 7.0,within_range
+2270,2025-03-31,npl_ratio,NPL ratio %,0.7,false,<= 2.0,within_range
+2270,2025-03-31,fee_income_ratio,Fee income / revenue %,30.0,false,>= 25.0,within_range
+2270,2025-03-31,cre_to_capital,CRE / total capital %,62.0,false,<= 120,within_range
+2270,2025-06-30,tier1_capital_ratio,Tier 1 capital ratio %,13.13,false,>= 9.0,within_range
+2270,2025-06-30,liquidity_ratio,Liquidity ratio %,5.55,false,2.0 - 7.0,within_range
+2270,2025-06-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+2270,2025-06-30,fee_income_ratio,Fee income / revenue %,30.3,false,>= 25.0,within_range
+2270,2025-06-30,cre_to_capital,CRE / total capital %,62.62,false,<= 120,within_range
+2270,2025-09-30,tier1_capital_ratio,Tier 1 capital ratio %,13.26,false,>= 9.0,within_range
+2270,2025-09-30,liquidity_ratio,Liquidity ratio %,5.61,false,2.0 - 7.0,within_range
+2270,2025-09-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+2270,2025-09-30,fee_income_ratio,Fee income / revenue %,30.6,false,>= 25.0,within_range
+2270,2025-09-30,cre_to_capital,CRE / total capital %,63.24,false,<= 120,within_range
+2270,2025-12-31,tier1_capital_ratio,Tier 1 capital ratio %,13.39,false,>= 9.0,within_range
+2270,2025-12-31,liquidity_ratio,Liquidity ratio %,5.67,false,2.0 - 7.0,within_range
+2270,2025-12-31,npl_ratio,NPL ratio %,0.68,false,<= 2.0,within_range
+2270,2025-12-31,fee_income_ratio,Fee income / revenue %,30.9,false,>= 25.0,within_range
+2270,2025-12-31,cre_to_capital,CRE / total capital %,63.86,false,<= 120,within_range
+2270,2026-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.52,false,>= 9.0,within_range
+2270,2026-03-31,liquidity_ratio,Liquidity ratio %,5.72,false,2.0 - 7.0,within_range
+2270,2026-03-31,npl_ratio,NPL ratio %,0.67,false,<= 2.0,within_range
+2270,2026-03-31,fee_income_ratio,Fee income / revenue %,31.2,false,>= 25.0,within_range
+2270,2026-03-31,cre_to_capital,CRE / total capital %,64.48,false,<= 120,within_range
+6384,2025-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.0,false,>= 9.0,within_range
+6384,2025-03-31,liquidity_ratio,Liquidity ratio %,5.5,false,2.0 - 7.0,within_range
+6384,2025-03-31,npl_ratio,NPL ratio %,0.7,false,<= 2.0,within_range
+6384,2025-03-31,fee_income_ratio,Fee income / revenue %,30.0,false,>= 25.0,within_range
+6384,2025-03-31,cre_to_capital,CRE / total capital %,62.0,false,<= 120,within_range
+6384,2025-06-30,tier1_capital_ratio,Tier 1 capital ratio %,13.13,false,>= 9.0,within_range
+6384,2025-06-30,liquidity_ratio,Liquidity ratio %,5.55,false,2.0 - 7.0,within_range
+6384,2025-06-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+6384,2025-06-30,fee_income_ratio,Fee income / revenue %,30.3,false,>= 25.0,within_range
+6384,2025-06-30,cre_to_capital,CRE / total capital %,62.62,false,<= 120,within_range
+6384,2025-09-30,tier1_capital_ratio,Tier 1 capital ratio %,13.26,false,>= 9.0,within_range
+6384,2025-09-30,liquidity_ratio,Liquidity ratio %,5.61,false,2.0 - 7.0,within_range
+6384,2025-09-30,npl_ratio,NPL ratio %,0.69,false,<= 2.0,within_range
+6384,2025-09-30,fee_income_ratio,Fee income / revenue %,30.6,false,>= 25.0,within_range
+6384,2025-09-30,cre_to_capital,CRE / total capital %,63.24,false,<= 120,within_range
+6384,2025-12-31,tier1_capital_ratio,Tier 1 capital ratio %,13.39,false,>= 9.0,within_range
+6384,2025-12-31,liquidity_ratio,Liquidity ratio %,5.67,false,2.0 - 7.0,within_range
+6384,2025-12-31,npl_ratio,NPL ratio %,0.68,false,<= 2.0,within_range
+6384,2025-12-31,fee_income_ratio,Fee income / revenue %,30.9,false,>= 25.0,within_range
+6384,2025-12-31,cre_to_capital,CRE / total capital %,63.86,false,<= 120,within_range
+6384,2026-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.52,false,>= 9.0,within_range
+6384,2026-03-31,liquidity_ratio,Liquidity ratio %,5.72,false,2.0 - 7.0,within_range
+6384,2026-03-31,npl_ratio,NPL ratio %,0.67,false,<= 2.0,within_range
+6384,2026-03-31,fee_income_ratio,Fee income / revenue %,31.2,false,>= 25.0,within_range
+6384,2026-03-31,cre_to_capital,CRE / total capital %,64.48,false,<= 120,within_range
+6989,2025-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.0,false,>= 9.0,within_range
+6989,2025-03-31,liquidity_ratio,Liquidity ratio %,5.5,false,2.0 - 7.0,within_range
+6989,2025-03-31,npl_ratio,NPL ratio %,,true,<= 2.0,within_range
+6989,2025-03-31,fee_income_ratio,Fee income / revenue %,,true,>= 25.0,within_range
+6989,2025-03-31,cre_to_capital,CRE / total capital %,62.0,false,<= 120,within_range
+6989,2025-06-30,tier1_capital_ratio,Tier 1 capital ratio %,13.13,false,>= 9.0,within_range
+6989,2025-06-30,liquidity_ratio,Liquidity ratio %,5.55,false,2.0 - 7.0,within_range
+6989,2025-06-30,npl_ratio,NPL ratio %,0.69,true,<= 2.0,within_range
+6989,2025-06-30,fee_income_ratio,Fee income / revenue %,30.3,true,>= 25.0,within_range
+6989,2025-06-30,cre_to_capital,CRE / total capital %,62.62,false,<= 120,within_range
+6989,2025-09-30,tier1_capital_ratio,Tier 1 capital ratio %,13.26,false,>= 9.0,within_range
+6989,2025-09-30,liquidity_ratio,Liquidity ratio %,5.61,false,2.0 - 7.0,within_range
+6989,2025-09-30,npl_ratio,NPL ratio %,0.69,true,<= 2.0,within_range
+6989,2025-09-30,fee_income_ratio,Fee income / revenue %,30.6,true,>= 25.0,within_range
+6989,2025-09-30,cre_to_capital,CRE / total capital %,63.24,false,<= 120,within_range
+6989,2025-12-31,tier1_capital_ratio,Tier 1 capital ratio %,13.39,false,>= 9.0,within_range
+6989,2025-12-31,liquidity_ratio,Liquidity ratio %,5.67,false,2.0 - 7.0,within_range
+6989,2025-12-31,npl_ratio,NPL ratio %,0.68,true,<= 2.0,within_range
+6989,2025-12-31,fee_income_ratio,Fee income / revenue %,30.9,true,>= 25.0,within_range
+6989,2025-12-31,cre_to_capital,CRE / total capital %,63.86,false,<= 120,within_range
+6989,2026-03-31,tier1_capital_ratio,Tier 1 capital ratio %,13.52,false,>= 9.0,within_range
+6989,2026-03-31,liquidity_ratio,Liquidity ratio %,5.72,false,2.0 - 7.0,within_range
+6989,2026-03-31,npl_ratio,NPL ratio %,0.67,true,<= 2.0,within_range
+6989,2026-03-31,fee_income_ratio,Fee income / revenue %,31.2,true,>= 25.0,within_range
+6989,2026-03-31,cre_to_capital,CRE / total capital %,64.48,false,<= 120,within_range

@@ -13,8 +13,13 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def tracked(pattern):
-    out = subprocess.run(["git", "ls-files", pattern], cwd=ROOT,
-                         capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(
+        ["git", "ls-files", pattern],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
     return [ROOT / line for line in out.splitlines() if line]
 
 
@@ -23,7 +28,8 @@ def test_http_goes_through_the_shared_helper():
     offenders = [
         str(p.relative_to(ROOT))
         for p in tracked("*.py")
-        if p.name != "http.py" and not str(p).startswith(str(ROOT / "tests"))
+        if p.name != "http.py"
+        and not str(p).startswith(str(ROOT / "tests"))
         and re.search(r"requests\.(get|post|request)\(", p.read_text())
     ]
     assert not offenders, f"use pipeline.http.throttled_get instead: {offenders}"
@@ -31,20 +37,21 @@ def test_http_goes_through_the_shared_helper():
 
 def test_executable_code_stays_in_owned_dirs():
     """Rule: no executable Python outside the dirs that own code —
-    db/, pipeline/, eda/, evals/, tests/, and Shu Han's dataset module."""
+    db/, pipeline/, eda/, evals/, index/, tests/, and Shu Han's dataset
+    module."""
     allowed = (
         "db/",
         "pipeline/",
         "eda/",
         "evals/",
+        "index/",
         "tests/",
         "unified_ffiec_fdic_dataset/",
     )
     offenders = [
         str(p.relative_to(ROOT))
         for p in tracked("*.py")
-        if p.stat().st_size > 0
-        and not str(p.relative_to(ROOT)).startswith(allowed)
+        if p.stat().st_size > 0 and not str(p.relative_to(ROOT)).startswith(allowed)
     ]
     assert not offenders, f"executable code outside owned dirs: {offenders}"
 
@@ -76,8 +83,9 @@ def test_workflow_matrix_modules_exist():
     m = re.search(r"module:\s*\[([^\]]*)\]", yml)
     assert m, "poll matrix not found in ingest.yml"
     for module in (x.strip() for x in m.group(1).split(",")):
-        assert (ROOT / "pipeline" / f"{module}.py").exists(), \
+        assert (ROOT / "pipeline" / f"{module}.py").exists(), (
             f"matrix entry '{module}' has no pipeline/{module}.py"
+        )
 
 
 def test_raw_item_sources_match_check_constraint():
@@ -92,5 +100,7 @@ def test_raw_item_sources_match_check_constraint():
     for p in tracked("pipeline/poll_*.py"):
         m = re.search(r'"source":\s*"([a-z_]+)"', p.read_text())
         if m:
-            assert m.group(1) in latest_check, \
-                f"{p.name} writes source '{m.group(1)}' not in CHECK {sorted(latest_check)}"
+            assert m.group(1) in latest_check, (
+                f"{p.name} writes source '{m.group(1)}' "
+                f"not in CHECK {sorted(latest_check)}"
+            )
