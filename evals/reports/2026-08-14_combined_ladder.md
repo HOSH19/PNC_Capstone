@@ -58,10 +58,30 @@ end-to-end: `backfill_gkg --to-csv` + `backfill_edgar --to-csv` →
 scoring/DESIGN.md 2026-08-14: ozk has no EDGAR history (FDIC filer), and
 pnfp's history was supplemented under its pre-2025 CIK.
 
-## Not yet swept
+## Full grid sweep (same day)
 
-The item-level directional threshold is fixed at p≥0.5 here. The model
-under-calls direction and `probs` is stored precisely so serving can lower
-that bar (DESIGN, obligation 2) — the full grid (item threshold × negative
-cut × ladder cutoffs) is the natural next run before declaring final
-cutoffs.
+All 27 combinations of item threshold p ∈ {0.3, 0.4, 0.5} × negative cut
+ns ∈ {0.05, 0.1, 0.2} × Imminent line ∈ {20, 30, 40}, same harness, same
+intersected keys:
+
+- **PR-AUC spans 0.0779–0.0810 — every combination beats fundamentals-only
+  (0.059).** The combination's edge does not depend on any threshold
+  choice we made. This is the sweep's real finding: nothing to tune, and
+  nothing that could have been overfit to 32 positives.
+- **The negative cut is the only knob that moves anything**, and it trades
+  recall against PR-AUC at noise scale: ns=0.05 catches 10/32 at
+  budget 10 (best), ns=0.1 catches 9/32 with the top PR-AUC, ns=0.2
+  drops to 8/32.
+- **The Imminent line (20/30/40) changes nothing** — identical metrics in
+  every triple. No 2022–2024 test quarter had fundamentals below even 40
+  with a negative sentiment quarter at the same time, so the top tier
+  never fired. Rita's "unverified against a demo case" caveat on that
+  tier stays open; the backtest cannot close it with this window's data.
+- The item threshold (0.3/0.4/0.5) barely registers — lowering the
+  directional bar adds negative items but moves quarter-level shares
+  roughly proportionally everywhere.
+
+**Decision**: keep the shipped defaults (p 0.5 / ns 0.1 / Imminent 30);
+switch ns to 0.05 only if the product priority becomes catch-rate at a
+fixed monitoring budget. Either is defensible; the difference is one
+event.
