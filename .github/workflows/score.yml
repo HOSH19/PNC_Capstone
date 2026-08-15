@@ -70,6 +70,12 @@ jobs:
           gh release download "$MODEL_RELEASE" --pattern '*' --dir ./weights --clobber
           test -f ./weights/config.json
 
+      # Before scoring, not after: both steps walk the rows the last ingest
+      # run added, and the aggregation layer reads scores and verdicts
+      # together. Cheap — regex over new titles, no model involved.
+      - name: Attribute new rows
+        run: python -m pipeline.attribute_items
+
       - name: Score pending rows
         run: |
           python -m pipeline.score_finbert \
