@@ -19,10 +19,19 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from pipeline import db
-from pipeline.http import throttled_get
+from pipeline.http import Transient, throttled_get
 
 API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 MAX_RECORDS = 250
+# calibration: 8 s stopped working. Every scheduled run from 2026-08-11 on
+# failed, 35 x 429 in the last one, banks dying on exhausted retries and the
+# job stretching to 3 h on backoff alone — with nothing else of ours calling
+# GDELT at the time, so this is the API getting stricter, not contention.
+# 60 s is deliberately generous rather than the minimum that might work: the
+# poller makes ~104 requests per run against a 6-hourly schedule, so even at
+# this spacing it finishes in under two hours, and recovering the live feed
+# matters more than finishing quickly. Lower it only against a clean probe.
+THROTTLE_S = 60.0
 OVERLAP = timedelta(minutes=15)
 FIRST_RUN_LOOKBACK = timedelta(hours=72)
 MIN_WINDOW = timedelta(minutes=1)  # bisect guard
@@ -32,14 +41,16 @@ def _fmt(dt: datetime) -> str:
     return dt.strftime("%Y%m%d%H%M%S")
 
 
-def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
+def fetch_window(
+    query: str, start: datetime, end: datetime, throttle_s: float = THROTTLE_S
+) -> list[dict]:
     # GDELT rejects parentheses around anything that is not an OR list
     # ("Parentheses may only be used around OR'd statements").
     wrapped = f"({query})" if " OR " in query else query
     resp = throttled_get(
         API_URL,
         label="GDELT",
-        throttle_s=8.0,
+        throttle_s=throttle_s,
         params={
             "query": wrapped,
             "mode": "artlist",
@@ -53,12 +64,24 @@ def fetch_window(query: str, start: datetime, end: datetime) -> list[dict]:
     try:
         articles = resp.json().get("articles", [])
     except ValueError:
-        # GDELT returns plain-text errors (e.g. malformed query) with HTTP 200
-        raise RuntimeError(f"GDELT non-JSON response: {resp.text[:200]}") from None
+        # GDELT returns plain-text errors (e.g. malformed query) with HTTP 200.
+        # But a body that starts like JSON and fails to parse is a *truncated*
+        # payload, which is the API buckling rather than the query being wrong
+        # -- observed 2026-08-13, a response cut off mid-article-list. Callers
+        # that can retry later should, so say which kind this is; a malformed
+        # query would fail identically on every future run and must not be
+        # mistaken for weather.
+        body = resp.text.lstrip()
+        detail = f"GDELT non-JSON response: {resp.text[:200]}"
+        if body.startswith(("{", "[")):
+            raise Transient(f"truncated: {detail}") from None
+        raise RuntimeError(detail) from None
     if len(articles) >= MAX_RECORDS:
         if (end - start) > MIN_WINDOW:
             mid = start + (end - start) / 2
-            return fetch_window(query, start, mid) + fetch_window(query, mid, end)
+            return fetch_window(query, start, mid, throttle_s) + fetch_window(
+                query, mid, end, throttle_s
+            )
         # GDELT ingests in 15-minute batches, so seendates cluster on batch
         # boundaries: a full page at the minimum window cannot be split
         # further, and the API has no cursor to page past 250. Anything older

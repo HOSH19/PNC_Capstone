@@ -1,0 +1,78 @@
+name: score
+
+# Scores newly collected rows with the fine-tuned FinBERT. Runs after ingest
+# so it picks up what that run just wrote.
+#
+# NOT the backlog. ~455k rows from the 2020-2024 backfill are also pending,
+# and they hold the low ids, so this job drains --newest-first and caps at
+# --limit; draining oldest-first on CPU would chew historical rows for hours
+# and never reach today's. The backlog is a one-off for Kaggle's GPU --
+# pipeline/kaggle_score_finbert.ipynb, same module, same queue.
+#
+# Separate from ingest.yml because of the dependencies: torch and transformers
+# are installed here and nowhere else, which is also why they stay out of
+# requirements.txt.
+
+on:
+  schedule:
+    - cron: "40 1,7,13,19 * * *" # ~40 min after each ingest run
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "max rows to score this run"
+        default: "3000"
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+  # The release tag holding the weights; also the cache key, so retraining
+  # means a new tag here and the cache invalidates itself.
+  MODEL_RELEASE: finbert-ft-2026-08-09
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          # CPU wheels: ~200 MB against ~2.5 GB for the CUDA build, and there
+          # is no GPU on this runner to use it with.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install transformers
+
+      # Weights are versioned outside the repo (scoring/DESIGN.md, Stage 2).
+      # A GitHub release rather than the Kaggle dataset they were published
+      # to: the runner already has GITHUB_TOKEN, so this needs no third-party
+      # credential at all. Cached because it is ~440 MB against a job that
+      # otherwise takes seconds, and the weights only change when the model
+      # is retrained.
+      - name: Cache model weights
+        id: weights
+        uses: actions/cache@v4
+        with:
+          path: ./weights
+          key: finbert-${{ env.MODEL_RELEASE }}
+
+      - name: Fetch model weights
+        if: steps.weights.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ./weights
+          gh release download "$MODEL_RELEASE" --pattern '*' --dir ./weights --clobber
+          test -f ./weights/config.json
+
+      - name: Score pending rows
+        run: |
+          python -m pipeline.score_finbert \
+            --model-dir ./weights \
+            --newest-first \
+            --limit "${{ inputs.limit || '3000' }}"
