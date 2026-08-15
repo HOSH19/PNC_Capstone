@@ -1,0 +1,67 @@
+name: index-score
+
+# Quarterly refresh of the fundamentals axis: collect the new Call Report,
+# refit the frozen model, write bank_index_score. See index/fundamentals/README.md.
+#
+# Timing follows FFIEC, not the calendar quarter. A filing is due 30-35 days
+# after quarter end and the bulk archive lands a little after that, so this runs
+# on the 20th of the month following each quarter end -- 20 Feb, 20 May, 20 Aug,
+# 20 Nov. Missing a quarter is harmless: both steps upsert, and the collector's
+# --backfill picks up anything skipped.
+#
+# The model is NOT retrained here. score_quarter.py refits the GP on the 5,000
+# committed rows in index/fundamentals/train_sample.parquet with a fixed seed,
+# which reproduces the same model every run -- a GP cannot be serialised
+# compactly, so replaying the fit is how the model is held constant. A bank's
+# score moves only when its filing moves. Re-freezing is a deliberate, separate
+# act: run freeze.py and increment model_version.
+on:
+  workflow_dispatch:
+    inputs:
+      quarter:
+        description: "report_date to score (YYYY-MM-DD). Blank scores the latest collected."
+        required: false
+  schedule:
+    - cron: "0 7 20 2,5,8,11 *"
+
+env:
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    # The collector downloads and parses a full CDR archive; the refit is ~15s
+    # but scoring every bank adds up. Generous, because a hung job that keeps
+    # the default 6h is worse than one that fails at 45m.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      # Idempotent by (rssd_id, report_date). FFIEC amends past filings, so a
+      # re-run replaces rather than skips.
+      - name: Collect the latest quarter into index_model_input
+        run: python -m pipeline.poll_ffiec_model_input
+
+      # The dispatch input goes through env, not ${{ }} inside run:. Interpolating
+      # it directly builds the shell script by string substitution, so a quarter
+      # containing shell metacharacters executes as code with the job's secrets in
+      # scope — anyone who can dispatch the workflow could read SUPABASE_DB_URL.
+      # actionlint does not flag this: it treats workflow_dispatch inputs as
+      # trusted.
+      # --seed-only: the collector pulls every filer, but bank_index_score
+      # publishes the tracked banks. Without it each quarterly run would widen
+      # the table's population and break any aggregate over it.
+      - name: Score it into bank_index_score
+        env:
+          QUARTER: ${{ github.event.inputs.quarter }}
+        run: |
+          if [ -n "$QUARTER" ]; then
+            python index/fundamentals/score_quarter.py --seed-only --quarter "$QUARTER"
+          else
+            python index/fundamentals/score_quarter.py --seed-only
+          fi

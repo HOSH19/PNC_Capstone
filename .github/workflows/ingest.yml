@@ -36,7 +36,15 @@ jobs:
       fail-fast: false
       matrix:
         # New pollers: add the module name here — one line. RUNBOOK.md §6.
-        module: [poll_gdelt, poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_agency_rss]
+        #
+        # poll_gkg replaced poll_gdelt on 2026-08-14. The DOC API limits on
+        # cumulative volume, not rate -- 8 s, 25 s and 60 s all 429'd alike --
+        # and its error body tells high-traffic users to change datasets, so
+        # no spacing was going to fix it. poll_gkg reads the same BigQuery
+        # tables the backfill uses, which also puts live and historical rows
+        # on one corpus. poll_gdelt.py stays in the tree: backfill_gkg still
+        # imports its title-hash helper.
+        module: [poll_gkg, poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_agency_rss, poll_occ_enforcement]
     steps:
       - uses: actions/checkout@v4
 
@@ -48,5 +56,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Only poll_gkg needs Google credentials. gcloud ships on the runner
+      # image, so this activates the service account rather than installing
+      # anything; the key never touches the working tree.
+      - name: Authenticate to BigQuery
+        if: matrix.module == 'poll_gkg'
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          KEY="$(mktemp)"
+          printf '%s' "$GCP_SA_KEY" > "$KEY"
+          gcloud auth activate-service-account --key-file="$KEY" --quiet
+          rm -f "$KEY"
+
       - name: Run ${{ matrix.module }}
+        env:
+          BIGQUERY_PROJECT: ${{ secrets.BIGQUERY_PROJECT }}
         run: python -m pipeline.${{ matrix.module }}
