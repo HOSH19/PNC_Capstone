@@ -30,7 +30,14 @@ vllm and torch out of it. Authenticate once with `gcloud auth login`.
 
 Cost: ~356 GiB for all five years, inside BigQuery's 1 TB monthly free tier.
 
+`--to-csv DIR` writes gkg_<year>.csv there instead of inserting: the Supabase
+rows this module loaded were deleted to stay inside the free tier, and the
+backtest corpus is file-based now. The CSV carries the attribution gate's
+verdict per row (pipeline.attribution) because there is no DB for
+attribute_items to stamp it into later.
+
     python -m pipeline.backfill_gkg --year 2020
+    python -m pipeline.backfill_gkg --year 2020 --to-csv corpus/
 """
 
 import argparse
@@ -46,7 +53,12 @@ import time
 from datetime import UTC, datetime
 
 from pipeline import db
-from pipeline.attribution import safe_banks, usable_aliases
+from pipeline.attribution import (
+    build_patterns,
+    counts_for_bank,
+    safe_banks,
+    usable_aliases,
+)
 from pipeline.poll_agency_rss import build_alias_index, match_banks
 from pipeline.poll_gdelt import normalize_title_hash
 
@@ -180,11 +192,45 @@ def to_rows(gkg_rows: list[dict], index: list) -> tuple[list[dict], dict]:
     return out, funnel
 
 
+CSV_COLUMNS = ["bank_id", "published_at", "title", "url", "language", "attributed"]
+
+
+def csv_rows(rows: list[dict], patterns: dict) -> list[dict]:
+    """raw_item rows -> CSV rows. Pure.
+
+    Deduped by (bank_id, url) in memory because that is what raw_item's
+    ON CONFLICT did for the DB path; `attributed` is written "true"/"false"
+    because csv.writer would spell Python bools "True"/"False".
+    """
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for r in rows:
+        if (r["bank_id"], r["url"]) in seen:
+            continue
+        seen.add((r["bank_id"], r["url"]))
+        out.append(
+            {
+                "bank_id": r["bank_id"],
+                "published_at": r["published_at"].isoformat(),
+                "title": r["title"],
+                "url": r["url"],
+                "language": r["meta"]["language"],
+                "attributed": str(
+                    counts_for_bank(r["title"], r["bank_id"], patterns)
+                ).lower(),
+            }
+        )
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--year", type=int, required=True)
     ap.add_argument("--project", default=PROJECT)
     ap.add_argument("--dry-run", action="store_true", help="query, insert nothing")
+    ap.add_argument(
+        "--to-csv", metavar="DIR", help="write gkg_<year>.csv to DIR; no DB writes"
+    )
     args = ap.parse_args()
 
     started = time.monotonic()
@@ -206,6 +252,18 @@ def main() -> None:
                 d = r["published_at"].date()
                 print(f"  {r['bank_id']:6} {d} {r['title'][:70]}")
             print("dry-run: nothing written", file=sys.stderr)
+            return
+        if args.to_csv:
+            out = csv_rows(rows, build_patterns(banks))
+            os.makedirs(args.to_csv, exist_ok=True)
+            path = os.path.join(args.to_csv, f"gkg_{args.year}.csv")
+            with open(path, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+                w.writeheader()
+                w.writerows(out)
+            # No heartbeat: that table records pipeline health, and this is a
+            # local export, not the pipeline.
+            print(f"{args.year}: {len(out)} rows -> {path}", file=sys.stderr)
             return
         inserted = 0
         for i in range(0, len(rows), 5000):

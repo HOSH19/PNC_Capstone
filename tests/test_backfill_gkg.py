@@ -1,6 +1,13 @@
 from datetime import UTC, datetime
 
-from pipeline.backfill_gkg import alias_pattern, parse_date, to_rows
+from pipeline.attribution import build_patterns
+from pipeline.backfill_gkg import (
+    CSV_COLUMNS,
+    alias_pattern,
+    csv_rows,
+    parse_date,
+    to_rows,
+)
 from pipeline.poll_agency_rss import build_alias_index
 
 BANKS = [
@@ -109,3 +116,36 @@ def test_generic_word_aliases_are_dropped_from_matching():
     assert rows == [] and funnel["skipped"]["no_bank"] == 1
     rows, _ = to_rows([_gkg("Banco Popular reports a quarterly loss")], index)
     assert rows[0]["bank_id"] == "bpop"
+
+
+def test_csv_rows_carry_the_attribution_verdict_lowercase():
+    """The file-based corpus has no attribute_items pass to stamp the verdict
+    later, so it rides along per row -- lowercase, because csv.writer would
+    spell Python bools 'True'/'False'."""
+    rows, _ = to_rows([_gkg("Wells Fargo posts a loss")], INDEX)
+    out = csv_rows(rows, build_patterns(BANKS))
+    assert list(out[0]) == CSV_COLUMNS
+    assert out[0]["attributed"] == "true"
+    assert out[0]["published_at"] == "2023-01-15T12:30:00+00:00"
+    assert out[0]["language"] == "English"
+
+
+def test_csv_rows_attributed_false_when_title_names_a_different_bank():
+    row = {
+        "bank_id": "pnc",
+        "published_at": datetime(2023, 1, 15, 12, 30, tzinfo=UTC),
+        "title": "Wells Fargo posts a loss",
+        "url": "https://x.test/1",
+        "meta": {"language": "English"},
+    }
+    out = csv_rows([row], build_patterns(BANKS))
+    assert out[0]["attributed"] == "false"
+
+
+def test_csv_rows_dedup_on_bank_and_url():
+    """The DB path leaned on raw_item's ON CONFLICT for this; a CSV has no
+    such net, so the dedup moves into memory."""
+    rows, _ = to_rows([_gkg("Wells Fargo and PNC Bank both report losses")], INDEX)
+    out = csv_rows(rows + rows, build_patterns(BANKS))
+    # same url under two banks is two rows; the same (bank_id, url) again is not
+    assert sorted(r["bank_id"] for r in out) == ["pnc", "wfc"]
