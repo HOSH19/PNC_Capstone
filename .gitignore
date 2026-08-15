@@ -20,3 +20,6 @@ finbert_*.csv
 
 # Kaggle upload staging (build artifact, rebuilt by the notebook recipe)
 kaggle_upload/
+
+# capstone report (local LaTeX build artifacts)
+report/

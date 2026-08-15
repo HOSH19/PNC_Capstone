@@ -44,7 +44,7 @@ jobs:
         # tables the backfill uses, which also puts live and historical rows
         # on one corpus. poll_gdelt.py stays in the tree: backfill_gkg still
         # imports its title-hash helper.
-        module: [poll_gkg, poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_agency_rss]
+        module: [poll_gkg, poll_edgar, poll_fdic_enforcement, poll_fed_enforcement, poll_agency_rss, poll_occ_enforcement]
     steps:
       - uses: actions/checkout@v4
 
