@@ -82,3 +82,7 @@ jobs:
             --model-dir ./weights \
             --newest-first \
             --limit "${{ inputs.limit || '3000' }}"
+
+      # Full recompute; bounded by banks x quarters, so it costs seconds.
+      - name: Aggregate to bank-quarter
+        run: python -m pipeline.aggregate_sentiment
