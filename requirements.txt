@@ -13,4 +13,3 @@ scipy>=1.11
 xgboost>=2.0
 ffiec-data-collector>=2.0.0rc1
 streamlit>=1.38
-scikit-learn>=1.5
