@@ -120,3 +120,44 @@ def test_incremental_job_drains_the_newest_end_of_the_queue():
     assert re.search(r"ORDER BY id\s+DESC", seen["sql"])
     score_finbert.fetch_pending(FakeConn(), 10)
     assert re.search(r"ORDER BY id\s+ASC", seen["sql"])
+
+
+def test_queue_only_serves_sources_the_model_trained_on():
+    """Enforcement-feed rows sit 'pending' by table default but have no
+    adapter; fetching them crashed the scheduled run on the unknown-source
+    guard. The queue filter and the park sweep must both key off the adapter
+    registry, not a second hand-kept list."""
+    from pipeline import score_finbert
+    from pipeline.eligibility import ADAPTERS
+
+    seen = {}
+
+    class FakeCur:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            seen["sql"], seen["params"] = sql, params
+
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCur()
+
+        def commit(self):
+            pass
+
+    score_finbert.fetch_pending(FakeConn(), 10)
+    assert "source = ANY" in seen["sql"]
+    assert seen["params"]["sources"] == sorted(ADAPTERS)
+
+    score_finbert.park_unscorable(FakeConn())
+    assert "NOT (source = ANY" in seen["sql"]
+    assert seen["params"]["sources"] == sorted(ADAPTERS)

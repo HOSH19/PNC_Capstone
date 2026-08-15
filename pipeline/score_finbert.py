@@ -79,6 +79,11 @@ def fetch_pending(conn, limit: int, newest_first: bool = False) -> list[dict]:
     a CPU run draining oldest-first would chew historical rows forever and
     never reach today's. The incremental job wants the opposite end; the
     backlog job wants this end, and both leave the other's rows pending.
+
+    Only adapter-known sources are drained: the model trained on the adapter
+    sources' text and nothing else, so scoring an enforcement feed would be
+    exactly the train/serve skew eligibility exists to prevent. Their rows
+    are parked by park_unscorable, not fetched and crashed on.
     """
     order = "DESC" if newest_first else "ASC"
     with conn.cursor() as cur:
@@ -86,11 +91,31 @@ def fetch_pending(conn, limit: int, newest_first: bool = False) -> list[dict]:
             f"""SELECT id, source, title, text_excerpt, meta
                 FROM raw_item
                 WHERE finbert_status = 'pending'
+                  AND source = ANY(%(sources)s)
                 ORDER BY id {order}
                 LIMIT %(limit)s""",
-            {"limit": limit},
+            {"limit": limit, "sources": sorted(eligibility.ADAPTERS)},
         )
         return cur.fetchall()
+
+
+def park_unscorable(conn) -> int:
+    """Retire pending rows of sources scoring will never drain.
+
+    Rows land 'pending' by table default whatever their source, but only
+    adapter sources are scored; without this the queue metric counts rows no
+    job will ever take. Idempotent, runs every start.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE raw_item SET finbert_status = 'skipped'
+               WHERE finbert_status = 'pending'
+                 AND NOT (source = ANY(%(sources)s))""",
+            {"sources": sorted(eligibility.ADAPTERS)},
+        )
+        parked = cur.rowcount
+    conn.commit()
+    return parked
 
 
 def write_batch(conn, scores: list[dict], skipped: list[dict]) -> None:
@@ -195,6 +220,9 @@ def main() -> None:
     scored = skipped_n = 0
     conn = db.connect()
     try:
+        parked = park_unscorable(conn)
+        if parked:
+            print(f"  {parked} unscorable-source rows parked", file=sys.stderr)
         while scored + skipped_n < args.limit:
             take = min(args.batch, args.limit - scored - skipped_n)
             rows = fetch_pending(conn, take, args.newest_first)
