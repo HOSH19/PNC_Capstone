@@ -85,6 +85,34 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"], row_factory=dict_row) as _co
             "loan_loss_allowance_ratio, cre_loans FROM fact_call_report"
         )
         _CALL_REPORT = pd.DataFrame(_cur.fetchall())
+
+        # bank_sentiment_quarter: live read (db/migrations/016_sentiment_
+        # aggregate.sql, same read-only contract as bank_index_score above).
+        # Only 2025Q1 onward has real signal; earlier quarters read back as
+        # n_scored=0 filler against the call-report calendar, so the date
+        # filter both avoids that filler and avoids double-counting the
+        # 2020-2024 window the CSV backfill below already covers.
+        _cur.execute(
+            "SELECT bank_id, quarter_end_date, n_scored, n_negative, n_positive, "
+            "mean_p_negative, mean_p_positive FROM bank_sentiment_quarter "
+            "WHERE quarter_end_date > '2024-12-31'"
+        )
+        _SENTIMENT_LIVE = pd.DataFrame(_cur.fetchall())
+
+        # raw_item x item_score: live scored+attributed items for RECENT
+        # ITEMS (Jiwon, PR #15 comment 2026-08-15, step 3 — "live window
+        # only", i.e. the DB's ongoing GDELT/EDGAR polling, not the
+        # file-based backtest corpus). Item-level, so scoped to the 4 demo
+        # banks rather than all 104 like the quarter-level tables above.
+        _cur.execute(
+            "SELECT ri.bank_id, ri.title, ri.url, ri.domain, ri.source, "
+            "ri.published_at, s.label FROM raw_item ri "
+            "JOIN item_score s ON s.raw_item_id = ri.id "
+            "WHERE ri.attributed AND ri.bank_id = ANY(%(bank_ids)s) "
+            "ORDER BY ri.published_at DESC",
+            {"bank_ids": ["wfc", "wal", "pnc", "jpm"]},
+        )
+        _RECENT_ITEMS = pd.DataFrame(_cur.fetchall())
 _INDEX_SCORES["quarter_end_date"] = _INDEX_SCORES["quarter_end_date"].astype(str)
 _MODEL_FEATURES["quarter_end_date"] = _MODEL_FEATURES["quarter_end_date"].astype(str)
 _MODEL_FEATURES["value"] = _MODEL_FEATURES["value"].astype(float)  # numeric column -> Decimal by default
@@ -92,6 +120,26 @@ _CALL_REPORT["report_date"] = _CALL_REPORT["report_date"].astype(str)
 for _col in ("total_assets", "tier1_capital_ratio", "total_capital_ratio",
              "npl_ratio", "loan_loss_allowance_ratio", "cre_loans"):
     _CALL_REPORT[_col] = _CALL_REPORT[_col].astype(float)
+_SENTIMENT_LIVE["quarter_end_date"] = _SENTIMENT_LIVE["quarter_end_date"].astype(str)
+for _col in ("n_scored", "n_negative", "n_positive"):
+    _SENTIMENT_LIVE[_col] = _SENTIMENT_LIVE[_col].astype(int)
+for _col in ("mean_p_negative", "mean_p_positive"):
+    _SENTIMENT_LIVE[_col] = _SENTIMENT_LIVE[_col].astype(float)
+
+# History: index/data/sentiment_quarter_backfill.csv (2020Q1-2024Q4, same
+# schema, committed 2026-08-15 per Jiwon's PR #15 comment). Union on
+# (bank_id, quarter_end_date) — the two windows don't overlap by construction
+# of the live query's date filter above.
+_SENTIMENT_HIST = pd.read_csv(
+    Path(__file__).parents[1] / "index" / "data" / "sentiment_quarter_backfill.csv",
+    usecols=["bank_id", "quarter_end_date", "n_scored", "n_negative", "n_positive",
+             "mean_p_negative", "mean_p_positive"],
+)
+_SENTIMENT = pd.concat([_SENTIMENT_HIST, _SENTIMENT_LIVE], ignore_index=True)
+_SENTIMENT = _SENTIMENT[_SENTIMENT["n_scored"] > 0].sort_values(
+    ["bank_id", "quarter_end_date"]
+)
+_RECENT_ITEMS["published_at"] = pd.to_datetime(_RECENT_ITEMS["published_at"], utc=True)
 
 # Refit of the frozen gp50_prod_v1 model (index/fundamentals/{train_sample.parquet,
 # frozen_params.json}, copied from the scoring branch — same files
@@ -281,6 +329,78 @@ def load_fundamentals_mock(bank_id: str) -> dict | None:
         "features": features,
     }
 
+
+# Negative cut is backtest-validated: evals/reports/2026-08-14_combined_ladder.md
+# swept 0.05/0.10/0.20 and 0.10 won on PR-AUC (0.0810), matching the default
+# already shipped in pipeline/combine_axes.py. The positive cut has no
+# backtest behind it — Jiwon's PR #15 comment (2026-08-15) calls it
+# "display only, no agreed rule yet... tunable later."
+SENTIMENT_NEG_SHARE_CUT = 0.1
+SENTIMENT_POS_SHARE_CUT = 0.2
+
+
+def load_sentiment(bank_id: str) -> dict | None:
+    """Build a `sentiment` dict (MOCK_BANKS shape) from _SENTIMENT (live
+    bank_sentiment_quarter unioned with the 2020-2024 CSV backfill).
+
+    Returns None if the bank has no scored quarters yet, same as a
+    hand-written entry omitting sentiment — compute_status()'s
+    fundamentals-only branch already handles that case.
+    """
+    rows = _SENTIMENT[_SENTIMENT["bank_id"] == bank_id]
+    if rows.empty:
+        return None
+    latest = rows.iloc[-1]
+
+    neg_share = latest["n_negative"] / latest["n_scored"]
+    pos_share = latest["n_positive"] / latest["n_scored"]
+    if neg_share >= SENTIMENT_NEG_SHARE_CUT:
+        label = "Negative"
+    elif pos_share > neg_share and pos_share >= SENTIMENT_POS_SHARE_CUT:
+        label = "Positive"
+    else:
+        label = "Neutral"
+
+    neutral_n = latest["n_scored"] - latest["n_negative"] - latest["n_positive"]
+    return {
+        # Net sentiment: mean p(negative) - mean p(positive) over scored
+        # items, in [-1, 1]. Only used for display/trend charting —
+        # compute_status() keys off `label`, never this value.
+        "score": round(float(latest["mean_p_negative"] - latest["mean_p_positive"]), 2),
+        "label": label,
+        "n_items": int(latest["n_scored"]),
+        "pct": {
+            "negative": round(100 * latest["n_negative"] / latest["n_scored"]),
+            "neutral": round(100 * neutral_n / latest["n_scored"]),
+            "positive": round(100 * latest["n_positive"] / latest["n_scored"]),
+        },
+        "trend": [
+            round(float(v), 2)
+            for v in (rows["mean_p_negative"] - rows["mean_p_positive"])
+        ],
+    }
+
+
+_FEED_DISPLAY = {"gdelt": "GDELT", "edgar": "EDGAR"}
+
+
+def load_recent_items(bank_id: str) -> list[tuple]:
+    """(title, label, source, days_ago, feed) tuples for render_recent_items,
+    from _RECENT_ITEMS (raw_item x item_score, live-scored + attributed).
+
+    Returns every attributed+scored item for the bank, not just a recent
+    slice — the date filter needs the full history to filter over, and
+    render_recent_items paginates the display 5-at-a-time on its own."""
+    rows = _RECENT_ITEMS[_RECENT_ITEMS["bank_id"] == bank_id]
+    today = date.today()
+    out = []
+    for _, r in rows.iterrows():
+        days_ago = (today - r["published_at"].date()).days
+        feed = _FEED_DISPLAY.get(r["source"], r["source"].upper())
+        out.append((r["title"], r["label"], r["domain"] or r["source"], days_ago, feed))
+    return out
+
+
 def _format_feature_value(v) -> str:
     if v is None or pd.isna(v):
         return "—"
@@ -365,17 +485,7 @@ MOCK_BANKS = {
             "persistently negative around regulatory penalties — the "
             "pattern the early-warning view is built to surface."
         ),
-        "sentiment": {
-            "score": -0.31,
-            "label": "Negative",
-            "n_items": 182,
-            "pct": {"negative": 48, "neutral": 30, "positive": 22},
-            "trend": [
-                0.05, 0.02, -0.04, -0.02, -0.08, -0.06, -0.11, -0.09, -0.14,
-                -0.12, -0.17, -0.15, -0.20, -0.18, -0.23, -0.21, -0.26, -0.24,
-                -0.29, -0.27, -0.31,
-            ],
-        },
+        "sentiment": load_sentiment("wfc"),
         "keywords": {
             "negative": [
                 ("regulatory fines", 0.92),
@@ -391,16 +501,9 @@ MOCK_BANKS = {
                 ("cost discipline", 0.33),
             ],
         },
-        "alerts": [
-            {"severity": "high", "text": "2 open Fed/FDIC enforcement actions this quarter (up from 1) — regulatory conduct risk"},
-        ],
+        "alerts": [],
         "fundamentals": load_fundamentals_mock("wfc"),
-        "recent_items": [
-            ("Regulator signals fresh penalties over consumer-billing practices", "negative", "reuters.com", 2, "GDELT"),
-            ("8-K — Item 8.01: settlement of outstanding consent order disclosed", "neutral", "sec.gov", 3, "EDGAR"),
-            ("Bank raises quarterly dividend, extends buyback", "positive", "marketwatch.com", 5, "GDELT"),
-            ("Analysts flag slower fee income amid asset-cap constraints", "negative", "ft.com", 6, "GDELT"),
-        ],
+        "recent_items": load_recent_items("wfc"),
         "feature_drivers": load_feature_attribution("wfc"),
     },
     "Western Alliance": {
@@ -413,17 +516,7 @@ MOCK_BANKS = {
             "sentiment accelerates — both axes now point the same way, "
             "which is the strongest configuration of the warning signal."
         ),
-        "sentiment": {
-            "score": -0.47,
-            "label": "Negative",
-            "n_items": 64,
-            "pct": {"negative": 62, "neutral": 26, "positive": 12},
-            "trend": [
-                0.00, -0.03, -0.07, -0.05, -0.11, -0.09, -0.15, -0.13, -0.19,
-                -0.17, -0.24, -0.22, -0.29, -0.27, -0.34, -0.32, -0.39, -0.37,
-                -0.44, -0.42, -0.47,
-            ],
-        },
+        "sentiment": load_sentiment("wal"),
         "keywords": {
             "negative": [
                 ("deposit outflows", 0.95),
@@ -437,31 +530,26 @@ MOCK_BANKS = {
                 ("insured deposit mix", 0.39),
             ],
         },
-        "alerts": [
-            {"severity": "high", "text": "2 open Fed/FDIC enforcement actions this quarter (up from 1)"},
-        ],
+        "alerts": [],
         "fundamentals": load_fundamentals_mock("wal"),
-        "recent_items": [
-            ("Ratings agency places regional lender on negative watch", "negative", "reuters.com", 0, "GDELT"),
-            ("8-K — Item 7.01: investor presentation on liquidity position", "neutral", "sec.gov", 1, "EDGAR"),
-            ("CRE concentration draws renewed analyst scrutiny", "negative", "barrons.com", 2, "GDELT"),
-            ("Completed capital raise shores up balance sheet", "positive", "marketwatch.com", 4, "GDELT"),
-        ],
+        "recent_items": load_recent_items("wal"),
         "feature_drivers": load_feature_attribution("wal"),
     },
-    # Placeholder demo entries — no concept mockup yet for sentiment /
-    # fundamentals, kept minimal on purpose.
+    # Placeholder demo entries — no concept mockup / narrative summary
+    # drafted for these, kept minimal on purpose. Sentiment is real
+    # (load_sentiment), same as fundamentals; only keywords/alerts/
+    # recent_items stay unwired (steps 4-5 of Jiwon's PR #15 wiring plan).
     "PNC Financial": {
         "name": "PNC Financial Services Group",
         "ticker": "PNC",
         "cert": "6384",
         "rssd": "817824",
-        "summary": "Placeholder — no illustrative sentiment data drafted yet. Fundamentals below are wired to index/mock/*.csv.",
-        "sentiment": None,
+        "summary": "Placeholder — no illustrative narrative drafted yet. Fundamentals and sentiment below are wired to live/historical data.",
+        "sentiment": load_sentiment("pnc"),
         "keywords": None,
         "alerts": [],
         "fundamentals": load_fundamentals_mock("pnc"),
-        "recent_items": [],
+        "recent_items": load_recent_items("pnc"),
         "feature_drivers": load_feature_attribution("pnc"),
     },
     "JPMorgan Chase": {
@@ -469,12 +557,12 @@ MOCK_BANKS = {
         "ticker": "JPM",
         "cert": "628",
         "rssd": "852218",
-        "summary": "Placeholder — no illustrative sentiment data drafted yet. Fundamentals below are wired to index/mock/*.csv.",
-        "sentiment": None,
+        "summary": "Placeholder — no illustrative narrative drafted yet. Fundamentals and sentiment below are wired to live/historical data.",
+        "sentiment": load_sentiment("jpm"),
         "keywords": None,
         "alerts": [],
         "fundamentals": load_fundamentals_mock("jpm"),
-        "recent_items": [],
+        "recent_items": load_recent_items("jpm"),
         "feature_drivers": load_feature_attribution("jpm"),
     },
 }
@@ -929,6 +1017,22 @@ def render_key_alerts(bank: dict) -> None:
                     "severity": "high",
                     "text": f"{f['name']} outside range: {f['latest']} vs threshold {f['threshold']}",
                 })
+    # Model feature drivers pushing distress_prob up — same real local
+    # attribution as the Model Feature Drivers panel below (load_
+    # feature_attribution), surfaced here for whatever's actually moving
+    # the score. Protective drivers (negative contribution) never alert;
+    # below the 1pp floor a driver is noise, not something to flag.
+    for d in bank.get("feature_drivers") or []:
+        pp = d["contribution"] * 100
+        if pp < 1:
+            continue
+        alerts.append({
+            "severity": "high" if pp >= 5 else "medium",
+            "text": (
+                f"{d['name']}: {_format_feature_value(d['value'])} vs peer avg "
+                f"{_format_feature_value(d['peer_mean'])} — {pp:+.2f}pp toward distress"
+            ),
+        })
     if not alerts:
         st.markdown(
             f'<div style="color:{TEXT_MUTED};font-size:0.85rem;margin-bottom:10px;">✅ No active alerts this quarter.</div>',
@@ -955,7 +1059,7 @@ def render_key_alerts(bank: dict) -> None:
 
 
 def render_sentiment(bank: dict) -> None:
-    st.markdown('<div class="panel-title">NEWS SENTIMENT — ROLLING 30 DAYS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">NEWS SENTIMENT — BY QUARTER</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="panel-caption">GDELT news + EDGAR 8-K excerpts · FinBERT (fine-tuned), 3-class</div>',
         unsafe_allow_html=True,
@@ -966,15 +1070,20 @@ def render_sentiment(bank: dict) -> None:
         return
     sent_color = SENTIMENT_LABEL_COLOR.get(sentiment["label"], TEXT_MUTED)
     st.markdown(
-        pill_html(sentiment["label"], sent_color, f"{sent_color}22", f"{sent_color}66"),
+        pill_html(sentiment["label"], sent_color, f"{sent_color}22", f"{sent_color}66")
+        # A 2-article quarter and a 400-article quarter shouldn't read as
+        # equally confident (Jiwon, PR #15 comment 2026-08-15).
+        + f'<span style="color:{TEXT_MUTED};font-size:0.85rem;margin-left:8px;">'
+        f"· {sentiment['n_items']} articles this quarter</span>",
         unsafe_allow_html=True,
     )
-    delta = round(sentiment["trend"][-1] - sentiment["trend"][-8], 2)
+    trend = sentiment["trend"]
+    delta = round(trend[-1] - trend[-2], 2) if len(trend) > 1 else None
     st.metric(
         f"{sentiment['n_items']} items scored",
         sentiment["score"],
         delta=delta,
-        help="Change vs ~1 week ago (green = improving, red = worsening)",
+        help="Change vs prior quarter (green = improving, red = worsening)",
     )
     pct = sentiment["pct"]
     st.markdown(
@@ -1204,9 +1313,20 @@ def render_recent_items(bank: dict) -> None:
         st.caption("No items in the selected date range.")
         return
 
+    page_size = 5
+    n_pages = (len(filtered) - 1) // page_size + 1
+    page_key = f"recent_page_{bank['ticker']}"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+    # Clamp rather than reset to 0: if the date filter just shrank the set
+    # out from under a later page, land on the new last page instead of
+    # silently jumping back to the start.
+    page = min(st.session_state[page_key], n_pages - 1)
+    st.session_state[page_key] = page
+
     label_color = {"negative": RED, "neutral": AMBER, "positive": GREEN}
     html_parts = []
-    for p in filtered:
+    for p in filtered[page * page_size : (page + 1) * page_size]:
         c = label_color.get(p["label"], TEXT_MUTED)
         badge = pill_html(p["label"], c, f"{c}22", f"{c}66", size="0.7rem")
         age_days = (today - p["date"]).days
@@ -1218,6 +1338,23 @@ def render_recent_items(bank: dict) -> None:
             "</div>"
         )
     st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+    if n_pages > 1:
+        prev_col, label_col, next_col = st.columns([1, 2, 1])
+        with prev_col:
+            if st.button("◀ Prev", key=f"recent_prev_{bank['ticker']}", disabled=page == 0, width="stretch"):
+                st.session_state[page_key] = page - 1
+                st.rerun()
+        with label_col:
+            st.markdown(
+                f'<div style="text-align:center;color:{TEXT_MUTED};font-size:0.8rem;padding-top:8px;">'
+                f"Page {page + 1} of {n_pages} · {len(filtered)} items</div>",
+                unsafe_allow_html=True,
+            )
+        with next_col:
+            if st.button("Next ▶", key=f"recent_next_{bank['ticker']}", disabled=page >= n_pages - 1, width="stretch"):
+                st.session_state[page_key] = page + 1
+                st.rerun()
 
 
 def main() -> None:
@@ -1231,19 +1368,30 @@ def main() -> None:
             + pill_html("CONCEPT MOCKUP · ILLUSTRATIVE DATA", AMBER, f"{AMBER}14", f"{AMBER}55"),
             unsafe_allow_html=True,
         )
+    bank_names = list(MOCK_BANKS.keys())
+
     with search_col:
-        st.text_input(
+        # Scoped to the 4 demo banks (MOCK_BANKS), same set the pills below
+        # offer — selectbox gives native type-to-filter for free. Setting
+        # the pills' own session_state key (before they're instantiated
+        # below) is how the two stay in sync without a callback.
+        searched = st.selectbox(
             "Search",
+            options=bank_names,
+            index=None,
             placeholder="Search a bank... (e.g. Wells Fargo)",
-            disabled=True,
             label_visibility="collapsed",
+            key="bank_search",
         )
+        if searched:
+            st.session_state["bank_pills"] = searched
 
     st.divider()
 
     with st.container(key="bank-picker"):
-        bank_names = list(MOCK_BANKS.keys())
-        demo_name = st.pills("104 tracked · demo:", bank_names, default=bank_names[0])
+        demo_name = st.pills(
+            "104 tracked · demo:", bank_names, default=bank_names[0], key="bank_pills"
+        )
     if not demo_name:
         demo_name = bank_names[0]
     bank = MOCK_BANKS[demo_name]
