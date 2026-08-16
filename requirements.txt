@@ -4,3 +4,13 @@ yfinance>=0.2
 feedparser>=6.0
 streamlit>=1.38
 python-dotenv>=1.0
+beautifulsoup4>=4.12
+
+# index/v4 modelling pipeline (extract / features / models / final_model)
+numpy>=1.26
+pandas>=2.0
+pyarrow>=14
+scikit-learn>=1.4
+scipy>=1.11
+xgboost>=2.0
+ffiec-data-collector>=2.0.0rc1

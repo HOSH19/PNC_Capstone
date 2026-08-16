@@ -1,0 +1,163 @@
+import json
+
+import pytest
+
+from pipeline.score_finbert import to_score_row, triage
+
+
+def _gdelt(id, title="Bank posts a loss", language="English"):
+    return {
+        "id": id,
+        "source": "gdelt",
+        "title": title,
+        "text_excerpt": None,
+        "meta": {"language": language},
+    }
+
+
+def _edgar(id, title="Bank 8-K", excerpt="Material event."):
+    return {
+        "id": id,
+        "source": "edgar",
+        "title": title,
+        "text_excerpt": excerpt,
+        "meta": {},
+    }
+
+
+def test_triage_uses_the_same_filter_training_did():
+    """Serving a different distribution than the model was trained on is the
+    skew the shared eligibility module exists to prevent."""
+    scorable, skipped = triage([_gdelt(1), _gdelt(2, language="Spanish"), _edgar(3)])
+    assert [r["id"] for r in scorable] == [1, 3]
+    assert [(r["id"], r["reason"]) for r in skipped] == [(2, "non_english")]
+
+
+def test_scorable_rows_carry_the_text_the_model_will_see():
+    scorable, _ = triage([_edgar(1)])
+    assert scorable[0]["text"] == "Bank 8-K\nMaterial event."
+
+
+def test_empty_text_is_skipped_not_scored():
+    _, skipped = triage([_gdelt(1, title=None)])
+    assert skipped[0]["reason"] == "empty_text"
+
+
+def test_unknown_source_raises_instead_of_skipping_everything():
+    """A missing adapter is a deploy mistake; silently skipping every row of
+    that source would look like the source simply had no eligible rows."""
+    with pytest.raises(RuntimeError, match="no eligibility adapter"):
+        triage([{"id": 9, "source": "newsapi", "title": "x", "meta": {}}])
+
+
+def test_probs_are_serialised_for_jsonb_not_dropped():
+    """The aggregation layer is expected to lower the directional threshold
+    rather than take argmax, which needs the distribution to survive."""
+    row = to_score_row(
+        7,
+        "negative",
+        {"negative": 0.61, "neutral": 0.3, "positive": 0.09},
+        "finbert-ft-2026-08-09",
+    )
+    assert row["raw_item_id"] == 7 and row["label"] == "negative"
+    assert json.loads(row["probs"])["negative"] == 0.61
+    assert row["model_version"] == "finbert-ft-2026-08-09"
+
+
+def test_cli_accepts_the_flags_the_workflow_passes():
+    """The unit tests exercise fetch_pending directly, so a flag used by
+    main() but missing from argparse only surfaces in Actions. Parse happens
+    before the torch import, so 'unrecognized arguments' is the one failure
+    this run must not produce."""
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pipeline.score_finbert",
+            "--model-dir",
+            "/nonexistent",
+            "--newest-first",
+            "--limit",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0
+    assert "unrecognized arguments" not in r.stderr
+
+
+def test_incremental_job_drains_the_newest_end_of_the_queue():
+    """The 2020-2024 backfill owns the low ids, so an oldest-first CPU run
+    would chew historical rows for hours and never reach today's."""
+    import re
+
+    from pipeline import score_finbert
+
+    seen = {}
+
+    class FakeCur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            seen["sql"] = sql
+
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCur()
+
+    score_finbert.fetch_pending(FakeConn(), 10, newest_first=True)
+    assert re.search(r"ORDER BY id\s+DESC", seen["sql"])
+    score_finbert.fetch_pending(FakeConn(), 10)
+    assert re.search(r"ORDER BY id\s+ASC", seen["sql"])
+
+
+def test_queue_only_serves_sources_the_model_trained_on():
+    """Enforcement-feed rows sit 'pending' by table default but have no
+    adapter; fetching them crashed the scheduled run on the unknown-source
+    guard. The queue filter and the park sweep must both key off the adapter
+    registry, not a second hand-kept list."""
+    from pipeline import score_finbert
+    from pipeline.eligibility import ADAPTERS
+
+    seen = {}
+
+    class FakeCur:
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            seen["sql"], seen["params"] = sql, params
+
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCur()
+
+        def commit(self):
+            pass
+
+    score_finbert.fetch_pending(FakeConn(), 10)
+    assert "source = ANY" in seen["sql"]
+    assert seen["params"]["sources"] == sorted(ADAPTERS)
+
+    score_finbert.park_unscorable(FakeConn())
+    assert "NOT (source = ANY" in seen["sql"]
+    assert seen["params"]["sources"] == sorted(ADAPTERS)

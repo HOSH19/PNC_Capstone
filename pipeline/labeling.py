@@ -2,11 +2,28 @@
 
 The Kaggle driver (labeling/kaggle_llama_labeling.py) is a thin GPU wrapper
 around these functions; everything here runs and is tested without a GPU.
-Prompt text lives in evals/prompts/*.md (git-versioned), not here.
+Prompt text lives in evals/prompts/*.md (git-versioned), not here — and so
+does its version marker, which parse_prompt_version reads.
 """
+
+import re
 
 LABELS: tuple[str, ...] = ("positive", "negative", "neutral")
 ARTICLE_PLACEHOLDER = "{{ARTICLE}}"
+VERSION_MARKER = re.compile(r"<!--\s*prompt_version:\s*(\S+?)\s*-->")
+
+
+def parse_prompt_version(template: str) -> str:
+    """Read the version marker the prompt file declares about itself.
+
+    The prompt text and its version are one artifact: a driver that carries
+    its own PROMPT_VERSION constant will keep writing 'v2' into model_meta
+    after someone points it at a v3 file, and the provenance silently lies.
+    """
+    m = VERSION_MARKER.search(template)
+    if not m:
+        raise ValueError("prompt file has no <!-- prompt_version: ... --> marker")
+    return m.group(1)
 
 
 def render_prompt(article_text: str, template: str) -> str:

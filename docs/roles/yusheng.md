@@ -43,6 +43,16 @@ whatever pace suits you.
 
 ## Your tasks
 
+> **Status 2026-08-07.** What actually happened: slices 1–5 were *reviewed*
+> (the reviewer saw the existing labels) and slice 6 was labeled fresh. A
+> review is not a blind second pass, so task A's measurement does not exist
+> and cannot be recovered from it — anchoring is exactly what a reviewer who
+> sees the first answer produces. Treat A below as **not done** if the team
+> still wants an IAA number; otherwise the final report must say the project
+> has no inter-annotator statistic rather than implying one. Slice 6 did its
+> job for the gate: it doubled the human `negative` rows and confirmed the
+> labeler's `negative` precision problem is structural.
+
 ### A. Blind re-label `gold_slice_2` and `gold_slice_3` — 100 rows
 
 Jiwon hands you a CSV of the same 100 articles with the `label` column
