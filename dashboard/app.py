@@ -67,9 +67,18 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"], row_factory=dict_row) as _co
         # bank_index_feature: real, for load_feature_attribution() (the "what's
         # unusual about this bank" panel) — separate from _INDEX_FEATURES
         # (still mock), which the CAMELS-shaped panel keeps using untouched.
+        # No bank_id column on this table (see 012_index_tables.sql), so the
+        # tracked-bank scope is reapplied via fdic_cert_number against
+        # bank_index_score — same set bank_id IS NOT NULL selected above.
+        # Was unscoped: fact_call_report covers the full national filer
+        # panel (167k+ bank-quarters per the fundamentals report), so an
+        # unfiltered read here pulled far more into memory than the
+        # dashboard ever uses, which is the likely cause of the Cloud OOM.
         _cur.execute(
             "SELECT fdic_cert_number, quarter_end_date, feature_name, "
-            "display_name, value, is_imputed FROM bank_index_feature"
+            "display_name, value, is_imputed FROM bank_index_feature "
+            "WHERE fdic_cert_number IN "
+            "(SELECT fdic_cert_number FROM bank_index_score WHERE bank_id IS NOT NULL)"
         )
         _MODEL_FEATURES = pd.DataFrame(_cur.fetchall())
 
@@ -79,10 +88,14 @@ with psycopg.connect(os.environ["SUPABASE_DB_URL"], row_factory=dict_row) as _co
         # didn't match the old mock's threshold band (never reconciled, see
         # earlier note) and fee_income_ratio was never populated in either
         # source; both stay excluded rather than wired in unverified.
+        # Scoped to tracked banks for the same reason as bank_index_feature
+        # above — this table is the full national filer panel otherwise.
         _cur.execute(
             "SELECT fdic_cert_number, report_date, total_assets, "
             "tier1_capital_ratio, total_capital_ratio, npl_ratio, "
-            "loan_loss_allowance_ratio, cre_loans FROM fact_call_report"
+            "loan_loss_allowance_ratio, cre_loans FROM fact_call_report "
+            "WHERE fdic_cert_number IN "
+            "(SELECT fdic_cert_number FROM bank_index_score WHERE bank_id IS NOT NULL)"
         )
         _CALL_REPORT = pd.DataFrame(_cur.fetchall())
 
