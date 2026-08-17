@@ -105,7 +105,11 @@ erDiagram
 - `eda/` — exploratory analysis of collected data; notebooks/reports, mentor email updates (owner: TBD).
 - `scoring/` — sentiment scoring: LLM-assisted labeling, fine-tuned BERT model, keyword explainability; consumes `raw_item` status columns (owner: TBD).
 - `index/` — stability index computation; parameters in `index/config/` YAML (owner: TBD).
-- `dashboard/` — read-only Streamlit views (owner: TBD).
+- `dashboard/` — read-only Streamlit views (owner: Rita). Fundamentals
+  (`bank_index_score`/`fact_call_report`) and sentiment (`bank_sentiment_quarter`
+  + `index/data/sentiment_quarter_backfill.csv`) are wired to live/historical
+  data for the 4 demo banks; keywords, headlines, and the full 104-bank
+  tracked list are still mock/placeholder.
 - `evals/` — gold-set evaluation harness and prompt bake-off (owner: TBD).
 
 The table schema in `db/migrations/` is the **only shared contract** between

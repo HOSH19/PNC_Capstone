@@ -37,7 +37,7 @@ def test_http_goes_through_the_shared_helper():
 
 def test_executable_code_stays_in_owned_dirs():
     """Rule: no executable Python outside the dirs that own code —
-    db/, pipeline/, eda/, evals/, index/, tests/, and Shu Han's dataset
+    db/, pipeline/, eda/, evals/, index/, tests/, dashboard/, and Shu Han's dataset
     module."""
     allowed = (
         "db/",
@@ -45,7 +45,7 @@ def test_executable_code_stays_in_owned_dirs():
         "eda/",
         "evals/",
         "index/",
-        "tests/",
+        "tests/", "dashboard/",
         "unified_ffiec_fdic_dataset/",
     )
     offenders = [
