@@ -14,7 +14,7 @@ table + a per-metric history view. The composite Stable/Watch/Elevated Risk
 status badge is driven solely by fundamentals x sentiment per the original
 rubric.
 
-Visual styling (cards, pills, gauge, segmented bar, keyword/category bars,
+Visual styling (cards, pills, gauge, segmented bar, category bars,
 sparklines) is a custom CSS + Altair layer on top of Streamlit's default
 widgets — see render_* functions below and the CSS block in main().
 """
@@ -49,10 +49,10 @@ load_dotenv()
 
 @st.cache_data(ttl=3600)
 def _load_data():
-    """All 5 live/backfill reads below, cached per session (refreshed hourly).
+    """All live/backfill reads below, cached per session (refreshed hourly).
     Streamlit reruns this whole module on every widget interaction, so
-    without caching, switching banks/metrics/pages was re-running all 5 SQL
-    queries plus the CSV backfill read on every single click."""
+    without caching, switching banks/metrics/pages was re-running every SQL
+    query plus the CSV backfill read on every single click."""
     # bank_index_score: live read (read-only, per docs/roles/ — no writes, no other
     # module's code imported, just the shared table). WHERE bank_id IS NOT NULL
     # scopes to the 105 tracked banks; live already carries the production
@@ -90,17 +90,19 @@ def _load_data():
             model_features = pd.DataFrame(_cur.fetchall())
 
             # fact_call_report: real CAMELS-style ratios, replacing the mock CSV
-            # the metric-breakdown table used to read. Only the 5 fields with a
-            # defensible % definition are kept — liquidity_ratio's real scale
-            # didn't match the old mock's threshold band (never reconciled, see
-            # earlier note) and fee_income_ratio was never populated in either
-            # source; both stay excluded rather than wired in unverified.
+            # the metric-breakdown table used to read. fee_income_ratio stays
+            # excluded — never populated in either source. total_deposits and
+            # securities_unrealized_loss are 100% populated for tracked banks
+            # (verified directly) and back real metrics below (deposits QoQ,
+            # unrealized loss % of assets); liquidity_ratio is included too,
+            # shown as context only — see _CALL_REPORT_METRICS.
             # Scoped to tracked banks for the same reason as bank_index_feature
             # above — this table is the full national filer panel otherwise.
             _cur.execute(
                 "SELECT fdic_cert_number, report_date, total_assets, "
-                "tier1_capital_ratio, total_capital_ratio, npl_ratio, "
-                "loan_loss_allowance_ratio, cre_loans FROM fact_call_report "
+                "total_deposits, tier1_capital_ratio, total_capital_ratio, "
+                "npl_ratio, loan_loss_allowance_ratio, liquidity_ratio, "
+                "securities_unrealized_loss, cre_loans FROM fact_call_report "
                 "WHERE fdic_cert_number IN "
                 "(SELECT fdic_cert_number FROM bank_index_score WHERE bank_id IS NOT NULL)"
             )
@@ -122,24 +124,35 @@ def _load_data():
             # raw_item x item_score: live scored+attributed items for RECENT
             # ITEMS (Jiwon, PR #15 comment 2026-08-15, step 3 — "live window
             # only", i.e. the DB's ongoing GDELT/EDGAR polling, not the
-            # file-based backtest corpus). Item-level, so scoped to the 4 demo
-            # banks rather than all 104 like the quarter-level tables above.
+            # file-based backtest corpus). Scoped to all tracked banks (same
+            # bank_id IS NOT NULL set as bank_index_score) now that the bank
+            # picker covers all 104, not just the 4 demo banks.
             _cur.execute(
                 "SELECT ri.bank_id, ri.title, ri.url, ri.domain, ri.source, "
                 "ri.published_at, s.label FROM raw_item ri "
                 "JOIN item_score s ON s.raw_item_id = ri.id "
-                "WHERE ri.attributed AND ri.bank_id = ANY(%(bank_ids)s) "
-                "ORDER BY ri.published_at DESC",
-                {"bank_ids": ["wfc", "wal", "pnc", "jpm"]},
+                "WHERE ri.attributed AND ri.bank_id IN "
+                "(SELECT bank_id FROM bank_index_score WHERE bank_id IS NOT NULL) "
+                "ORDER BY ri.published_at DESC"
             )
             recent_items = pd.DataFrame(_cur.fetchall())
+
+            # bank: the full tracked-bank reference table (name/ticker/cert/
+            # rssd for all 104), used to build MOCK_BANKS below instead of
+            # the 4 hand-typed entries it used to have.
+            _cur.execute(
+                "SELECT bank_id, holding_name, ticker, fdic_cert, rssd_id "
+                "FROM bank ORDER BY holding_name"
+            )
+            banks_ref = pd.DataFrame(_cur.fetchall())
 
     index_scores["quarter_end_date"] = index_scores["quarter_end_date"].astype(str)
     model_features["quarter_end_date"] = model_features["quarter_end_date"].astype(str)
     model_features["value"] = model_features["value"].astype(float)  # numeric column -> Decimal by default
     call_report["report_date"] = call_report["report_date"].astype(str)
-    for _col in ("total_assets", "tier1_capital_ratio", "total_capital_ratio",
-                 "npl_ratio", "loan_loss_allowance_ratio", "cre_loans"):
+    for _col in ("total_assets", "total_deposits", "tier1_capital_ratio",
+                 "total_capital_ratio", "npl_ratio", "loan_loss_allowance_ratio",
+                 "liquidity_ratio", "securities_unrealized_loss", "cre_loans"):
         call_report[_col] = call_report[_col].astype(float)
     sentiment_live["quarter_end_date"] = sentiment_live["quarter_end_date"].astype(str)
     for _col in ("n_scored", "n_negative", "n_positive"):
@@ -162,10 +175,10 @@ def _load_data():
     )
     recent_items["published_at"] = pd.to_datetime(recent_items["published_at"], utc=True)
 
-    return index_scores, model_features, call_report, sentiment, recent_items
+    return index_scores, model_features, call_report, sentiment, recent_items, banks_ref
 
 
-_INDEX_SCORES, _MODEL_FEATURES, _CALL_REPORT, _SENTIMENT, _RECENT_ITEMS = _load_data()
+_INDEX_SCORES, _MODEL_FEATURES, _CALL_REPORT, _SENTIMENT, _RECENT_ITEMS, _BANKS_REF = _load_data()
 
 
 @st.cache_resource
@@ -244,20 +257,37 @@ def _ceiling_status(value, ceiling: float) -> str | None:
 
 
 # feature_name -> (group, display name, threshold text, status function).
-# Thresholds are only set where there's a real regulatory reference point:
+# Thresholds are only set where there's a real reference point:
 # 8%/10% are the PCA "well capitalized" minimums for Tier 1 / Total risk-based
 # capital (12 CFR 324.403); 300% is the interagency CRE-concentration
-# guidance (2006) for CRE loans as a share of capital. npl_ratio and
-# loan_loss_allowance_ratio have no equivalent hard regulatory line — shown
-# as context only (threshold "—", status left unset) rather than inventing
-# one. liquidity_ratio and fee_income_ratio are excluded — see the DB fetch
-# comment above.
+# guidance (2006) for CRE loans as a share of capital; 2.0% is the absolute
+# floor from the locked distress event rule (evals/distress_definition.md —
+# NPL >2% AND >=1.5x prior quarter). Only the floor half is applied here:
+# the dashboard's per-quarter status has no QoQ lookback, so a bank sitting
+# persistently above 2% will show a breach even without a recent spike.
+# -10.0 on deposits_qoq is the OTHER locked distress-rule leg, same source
+# (deposit outflow >= 10% QoQ). -5.0 on unrealized_loss_pct_assets is not a
+# locked rule — evals/distress_threshold_eda.py tested it (157 quarters/18
+# banks) and evals/distress_definition.md explicitly excluded it from the
+# event trigger ("floods the label; keep as a GP feature") — but that's a
+# reason not to gate the *ground-truth label* on it, not a reason to hide it
+# from an analyst. Used here as a Key-Alert-style materiality flag, the
+# project's own empirical reference point rather than an invented one.
+# loan_loss_allowance_ratio and liquidity_ratio have no such reference point
+# — liquidity_ratio's low tail "tags structural business models more than
+# acute stress" per the same EDA doc — so both are shown as context only
+# (threshold "—", status left unset) rather than inventing one.
 _CALL_REPORT_METRICS = {
     "tier1_capital_ratio": ("Capital", "Tier 1 capital ratio %", "≥ 8.0", lambda v: _floor_status(v, 8.0)),
     "total_capital_ratio": ("Capital", "Total capital ratio %", "≥ 10.0", lambda v: _floor_status(v, 10.0)),
-    "npl_ratio": ("Credit Quality", "NPL ratio %", None, lambda v: None),
+    "npl_ratio": ("Credit Quality", "NPL ratio %", "≤ 2.0", lambda v: _ceiling_status(v, 2.0)),
     "loan_loss_allowance_ratio": ("Credit Quality", "Loan-loss allowance / loans %", None, lambda v: None),
     "cre_to_capital": ("Credit Quality", "CRE loans / capital %", "≤ 300", lambda v: _ceiling_status(v, 300.0)),
+    "deposits_qoq": ("Liquidity", "Total deposits, QoQ %", "≥ -10.0", lambda v: _floor_status(v, -10.0)),
+    "unrealized_loss_pct_assets": (
+        "Liquidity", "Unrealized securities loss / assets %", "≥ -5.0", lambda v: _floor_status(v, -5.0)
+    ),
+    "liquidity_ratio": ("Liquidity", "Liquidity ratio %", None, lambda v: None),
 }
 # feature_name -> CAMELS group; not a schema column, so the mapping lives
 # here alongside the other display concerns the dashboard owns.
@@ -268,8 +298,20 @@ def _build_call_report_features() -> pd.DataFrame:
     """fact_call_report (wide, one row per bank-quarter) -> the same long
     shape bank_index_feature uses (one row per bank-quarter-feature), so
     load_fundamentals_mock's existing grouping/history logic needs no changes.
-    cre_to_capital is derived: cre_loans / (total_assets * tier1/100) — there's
-    no capital-in-dollars column, so capital is backed out from the ratio.
+
+    Three derived columns, none stored directly in fact_call_report:
+    - cre_to_capital: cre_loans / (total_assets * tier1/100) — there's no
+      capital-in-dollars column, so capital is backed out from the ratio.
+    - unrealized_loss_pct_assets: securities_unrealized_loss / total_assets,
+      same-quarter, same definition eda/distress_threshold_eda.py uses.
+    - deposits_qoq: % change in total_deposits vs. the same bank's prior
+      quarter — the exact deposit-outflow leg from evals/distress_
+      definition.md, so it needs a sort + groupby shift, not a same-row
+      ratio like the other two. Guarded against a zero/missing prior
+      quarter the same way the locked rule is ("requires a prior quarter
+      ... with total_deposits > 0") — pct_change would otherwise divide by
+      zero or diff against a bank's first-ever reported quarter.
+
     Rows with a NULL underlying value are dropped rather than passed through
     (npl_ratio in particular is ~42% NULL DB-wide), same as bank_index_feature
     already does for genuinely missing inputs.
@@ -277,7 +319,19 @@ def _build_call_report_features() -> pd.DataFrame:
     d = _CALL_REPORT.copy()
     cap_dollars = d["total_assets"] * d["tier1_capital_ratio"] / 100
     d["cre_to_capital"] = (100 * d["cre_loans"] / cap_dollars).round(1)
-    for _col in ("tier1_capital_ratio", "total_capital_ratio", "npl_ratio", "loan_loss_allowance_ratio"):
+    d["unrealized_loss_pct_assets"] = (
+        100 * d["securities_unrealized_loss"] / d["total_assets"]
+    ).round(2)
+
+    d = d.sort_values(["fdic_cert_number", "report_date"])
+    prior_deposits = d.groupby("fdic_cert_number")["total_deposits"].shift(1)
+    prior_deposits = prior_deposits.where(prior_deposits > 0)
+    d["deposits_qoq"] = (
+        100 * (d["total_deposits"] - prior_deposits) / prior_deposits
+    ).round(2)
+
+    for _col in ("tier1_capital_ratio", "total_capital_ratio", "npl_ratio",
+                 "loan_loss_allowance_ratio", "liquidity_ratio"):
         d[_col] = d[_col].round(2)
 
     long_rows = []
@@ -308,8 +362,8 @@ def _quarter_label(quarter_end_date: str) -> str:
 
 def _format_threshold(text) -> str:
     # threshold_text is NULL for metrics with no established regulatory
-    # threshold (npl_ratio, loan_loss_allowance_ratio — see
-    # _CALL_REPORT_METRICS) — render code needs a plain string, not NaN.
+    # threshold (loan_loss_allowance_ratio — see _CALL_REPORT_METRICS) —
+    # render code needs a plain string, not NaN.
     if pd.isna(text):
         return "—"
     return text.replace(">=", "≥").replace("<=", "≤").replace(" - ", " – ")
@@ -347,13 +401,16 @@ def load_fundamentals_mock(bank_id: str) -> dict | None:
                 "prior": values[-2] if len(values) > 1 else values[-1],
                 "latest": values[-1],
                 "threshold": _format_threshold(row["threshold_text"]),
-                # status is NULL for the same no-threshold metrics — falls
-                # back to a fourth, unstyled state (render_fundamentals'
-                # status_colors has no "unknown" entry, so it renders muted).
+                # status is NULL for the no-threshold metrics (loan_loss_
+                # allowance_ratio, liquidity_ratio — see _CALL_REPORT_METRICS)
+                # — labeled distinctly from a real status so it doesn't read
+                # as missing data; falls back to a fourth, unstyled state
+                # (render_fundamentals' status_colors has no "no threshold"
+                # entry, so it renders muted).
                 "status": (
                     _STATUS_DISPLAY.get(row["status"], row["status"])
                     if pd.notna(row["status"])
-                    else "unknown"
+                    else "no threshold"
                 ),
                 "history": values,
             }
@@ -512,98 +569,95 @@ def load_feature_attribution(bank_id: str, top_n: int = 5) -> list[dict] | None:
 
 FEATURE_QUARTERS = ["Q1 '25", "Q2 '25", "Q3 '25", "Q4 '25", "Q1 '26"]
 
-MOCK_BANKS = {
-    "Wells Fargo": {
-        "name": "Wells Fargo & Company",
-        "ticker": "WFC",
-        "cert": "3511",
-        "rssd": "451965",
-        "summary": (
-            "Fundamentals sit in the neutral band, but news flow is "
-            "persistently negative around regulatory penalties — the "
-            "pattern the early-warning view is built to surface."
-        ),
-        "sentiment": load_sentiment("wfc"),
-        "keywords": {
-            "negative": [
-                ("regulatory fines", 0.92),
-                ("consent order", 0.81),
-                ("asset cap", 0.74),
-                ("overcharging customers", 0.66),
-                ("probe widens", 0.52),
-            ],
-            "positive": [
-                ("dividend raise", 0.58),
-                ("buyback program", 0.47),
-                ("earnings beat", 0.41),
-                ("cost discipline", 0.33),
-            ],
-        },
-        "alerts": [],
-        "fundamentals": load_fundamentals_mock("wfc"),
-        "recent_items": load_recent_items("wfc"),
-        "feature_drivers": load_feature_attribution("wfc"),
-    },
-    "Western Alliance": {
-        "name": "Western Alliance Bancorporation",
-        "ticker": "WAL",
-        "cert": "57512",
-        "rssd": "3138146",
-        "summary": (
-            "Fundamentals dipped below the 80 distress line while negative "
-            "sentiment accelerates — both axes now point the same way, "
-            "which is the strongest configuration of the warning signal."
-        ),
-        "sentiment": load_sentiment("wal"),
-        "keywords": {
-            "negative": [
-                ("deposit outflows", 0.95),
-                ("CRE exposure", 0.84),
-                ("credit downgrade", 0.77),
-                ("liquidity questions", 0.69),
-                ("short interest", 0.55),
-            ],
-            "positive": [
-                ("capital raise completed", 0.46),
-                ("insured deposit mix", 0.39),
-            ],
-        },
-        "alerts": [],
-        "fundamentals": load_fundamentals_mock("wal"),
-        "recent_items": load_recent_items("wal"),
-        "feature_drivers": load_feature_attribution("wal"),
-    },
-    # Placeholder demo entries — no concept mockup / narrative summary
-    # drafted for these, kept minimal on purpose. Sentiment is real
-    # (load_sentiment), same as fundamentals; only keywords/alerts/
-    # recent_items stay unwired (steps 4-5 of Jiwon's PR #15 wiring plan).
-    "PNC Financial": {
-        "name": "PNC Financial Services Group",
-        "ticker": "PNC",
-        "cert": "6384",
-        "rssd": "817824",
-        "summary": "Placeholder — no illustrative narrative drafted yet. Fundamentals and sentiment below are wired to live/historical data.",
-        "sentiment": load_sentiment("pnc"),
-        "keywords": None,
-        "alerts": [],
-        "fundamentals": load_fundamentals_mock("pnc"),
-        "recent_items": load_recent_items("pnc"),
-        "feature_drivers": load_feature_attribution("pnc"),
-    },
-    "JPMorgan Chase": {
-        "name": "JPMorgan Chase & Co.",
-        "ticker": "JPM",
-        "cert": "628",
-        "rssd": "852218",
-        "summary": "Placeholder — no illustrative narrative drafted yet. Fundamentals and sentiment below are wired to live/historical data.",
-        "sentiment": load_sentiment("jpm"),
-        "keywords": None,
-        "alerts": [],
-        "fundamentals": load_fundamentals_mock("jpm"),
-        "recent_items": load_recent_items("jpm"),
-        "feature_drivers": load_feature_attribution("jpm"),
-    },
+# Hand-written illustrative narrative, kept only for the two banks it was
+# originally drafted for (concept mockup, mentor discussion 2026-07-12).
+# Every other tracked bank gets the same placeholder text PNC/JPM already
+# used — fundamentals/sentiment/recent_items are real for all of them
+# regardless; only this narrative flavor text is hand-typed.
+_HAND_WRITTEN_SUMMARIES = {
+    "wfc": (
+        "Fundamentals sit in the neutral band, but news flow is "
+        "persistently negative around regulatory penalties — the "
+        "pattern the early-warning view is built to surface."
+    ),
+    "wal": (
+        "Fundamentals dipped below the 80 distress line while negative "
+        "sentiment accelerates — both axes now point the same way, "
+        "which is the strongest configuration of the warning signal."
+    ),
 }
+
+
+def _generate_summary(
+    fundamentals: dict | None, sentiment: dict | None, feature_drivers: list | None
+) -> str:
+    """Rule-based narrative stitched from a bank's own real numbers — the
+    same score/label/sentiment/driver figures the rest of the page already
+    shows, not a model output. Stand-in for banks with no hand-written
+    narrative (everything outside _HAND_WRITTEN_SUMMARIES)."""
+    if fundamentals is None:
+        return "No fundamentals data yet — insufficient Call Report history to compute a score."
+
+    score, label, trend = fundamentals["score"], fundamentals["label"], fundamentals["trend"]
+    sentence = f"Fundamentals score is {score} ({label.lower()})"
+    if len(trend) > 1 and trend[-1] != trend[-2]:
+        delta = trend[-1] - trend[-2]
+        sentence += f", {'up' if delta > 0 else 'down'} {abs(delta)} pts QoQ"
+    sentence += "."
+
+    if sentiment is not None:
+        n = sentiment["n_items"]
+        sentence += (
+            f" News sentiment reads {sentiment['label'].lower()} over "
+            f"{n} scored item{'s' if n != 1 else ''} this quarter."
+        )
+    else:
+        sentence += " No sentiment data yet."
+
+    if feature_drivers:
+        top = feature_drivers[0]
+        pp = top["contribution"] * 100
+        if abs(pp) >= 1:
+            sentence += (
+                f" Top model driver: {top['name']} "
+                f"({pp:+.1f}pp {'toward distress' if pp > 0 else 'protective'})."
+            )
+
+    return sentence
+
+
+@st.cache_data(ttl=3600)
+def _build_banks() -> dict:
+    """MOCK_BANKS shape, but for every tracked bank in _BANKS_REF (104) rather
+    than 4 hardcoded entries. Cached like _load_data()/_load_gp_model() above —
+    this calls load_fundamentals_mock/load_sentiment/load_recent_items/
+    load_feature_attribution (the last one runs the GP model) once per bank,
+    so without caching it would redo ~104x the per-click work _load_data()
+    used to."""
+    banks = {}
+    for _, row in _BANKS_REF.iterrows():
+        bank_id = row["bank_id"]
+        fundamentals = load_fundamentals_mock(bank_id)
+        sentiment = load_sentiment(bank_id)
+        feature_drivers = load_feature_attribution(bank_id)
+        banks[row["holding_name"]] = {
+            "name": row["holding_name"],
+            "ticker": row["ticker"],
+            "cert": str(row["fdic_cert"]),
+            "rssd": str(row["rssd_id"]),
+            "summary": _HAND_WRITTEN_SUMMARIES.get(
+                bank_id, _generate_summary(fundamentals, sentiment, feature_drivers)
+            ),
+            "sentiment": sentiment,
+            "alerts": [],
+            "fundamentals": fundamentals,
+            "recent_items": load_recent_items(bank_id),
+            "feature_drivers": feature_drivers,
+        }
+    return banks
+
+
+MOCK_BANKS = _build_banks()
 
 # ---------------------------------------------------------------------------
 # Visual design tokens — hand-matched to dashboard/concept/first-screen-*.png
@@ -704,20 +758,6 @@ def stat_tile_html(label: str, value: str, value_color: str = None) -> str:
     )
 
 
-def _keyword_bars_html(rows: list, color: str) -> str:
-    parts = []
-    for word, weight in rows:
-        pct = int(round(weight * 100))
-        parts.append(
-            '<div class="kw-row">'
-            f'<div class="kw-label">{word}</div>'
-            f'<div class="kw-track"><div class="kw-fill" style="width:{pct}%;background:{color};"></div></div>'
-            f'<div class="kw-value">{weight:.2f}</div>'
-            "</div>"
-        )
-    return '<div class="kw-col-wrap">' + "".join(parts) + "</div>"
-
-
 def _quarterly_score_chart(quarters: list, scores: list, color: str, width: int = None) -> alt.Chart:
     df = pd.DataFrame({"quarter": quarters, "score": scores})
     y_pad = max(2, (max(scores) - min(scores)) * 0.4)
@@ -805,12 +845,6 @@ div[class*="st-key-card-"] {{
     padding: 6px 8px 14px 8px;
     margin-bottom: 8px;
 }}
-.st-key-bank-picker [data-testid="stWidgetLabel"] p {{
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-size: 0.72rem;
-    color: {TEXT_MUTED};
-}}
 .panel-title {{
     font-size: 0.8rem;
     font-weight: 700;
@@ -822,10 +856,6 @@ div[class*="st-key-card-"] {{
     color: {TEXT_MUTED};
     font-size: 0.82rem;
     margin-bottom: 14px;
-}}
-.st-key-recent-in-keywords {{
-    border-left: 1px solid {BORDER};
-    padding-left: 20px;
 }}
 .seg-bar {{
     display: flex;
@@ -841,35 +871,6 @@ div[class*="st-key-card-"] {{
     gap: 18px;
     font-size: 0.82rem;
     margin-bottom: 10px;
-}}
-.kw-row {{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 9px;
-}}
-.kw-label {{
-    flex: 0 0 46%;
-    font-size: 0.85rem;
-    color: {TEXT_PRIMARY};
-}}
-.kw-track {{
-    flex: 1;
-    height: 8px;
-    border-radius: 999px;
-    background: {BORDER};
-    overflow: hidden;
-}}
-.kw-fill {{
-    height: 100%;
-    border-radius: 999px;
-}}
-.kw-value {{
-    flex: 0 0 40px;
-    text-align: right;
-    font-size: 0.8rem;
-    color: {TEXT_MUTED};
-    font-family: monospace;
 }}
 .gauge-track {{
     position: relative;
@@ -904,14 +905,14 @@ div[class*="st-key-card-"] {{
     width: 100%;
     border-collapse: collapse;
     margin-top: 10px;
-    font-size: 0.8rem;
+    font-size: 0.925rem;
 }}
 .fund-table th {{
     text-align: left;
     color: {TEXT_MUTED};
     font-weight: 600;
     text-transform: uppercase;
-    font-size: 0.64rem;
+    font-size: 0.765rem;
     letter-spacing: 0.04em;
     padding: 4px 8px;
     border-bottom: 1px solid {BORDER};
@@ -1030,18 +1031,24 @@ div[class*="st-key-card-"] {{
 def render_header(bank: dict) -> None:
     name_col, status_col = st.columns([5, 1], gap="small", vertical_alignment="center")
     with name_col:
-        st.subheader(bank["name"])
+        st.markdown(
+            f'<span style="font-size:2.25rem;font-weight:700;color:{TEXT_PRIMARY};">{bank["name"]}</span>',
+            unsafe_allow_html=True,
+        )
     with status_col:
         status = compute_status(bank)
         color = STATUS_COLOR[status]
         st.markdown(
             '<div style="display:flex;justify-content:flex-end;">'
-            + pill_html(f"● {status}", color, f"{color}22", f"{color}66", size="1.05rem")
+            + pill_html(f"● {status}", color, f"{color}22", f"{color}66", size="1.3rem")
             + "</div>",
             unsafe_allow_html=True,
         )
     st.caption(f"{bank['ticker']} · cert {bank['cert']} · rssd {bank['rssd']}")
-    st.write(bank["summary"])
+    st.markdown(
+        f'<span style="font-size:1.125rem;color:{TEXT_PRIMARY};">{bank["summary"]}</span>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_key_alerts(bank: dict) -> None:
@@ -1091,7 +1098,7 @@ def render_key_alerts(bank: dict) -> None:
         )
     if len(alerts) > 2:
         st.markdown(f'<div class="alerts-scroll">{html}</div>', unsafe_allow_html=True)
-        st.caption(f"Showing all {len(alerts)}, most severe first — scroll for more ↕")
+        st.caption(f"Showing all {len(alerts)}, most severe first. Scroll for more ↕")
     else:
         st.markdown(html, unsafe_allow_html=True)
 
@@ -1140,31 +1147,12 @@ def render_sentiment(bank: dict) -> None:
     st.line_chart(sentiment["trend"], height=160, color=RED)
 
 
-def render_keywords(bank: dict) -> None:
-    st.markdown(
-        '<div class="panel-title">STANDOUT KEYWORDS — WHAT DRIVES THE SENTIMENT</div>', unsafe_allow_html=True
-    )
-    st.markdown(
-        '<div class="panel-caption">Keyword clustering / PCA over scored articles (explainability)</div>',
-        unsafe_allow_html=True,
-    )
-    keywords = bank["keywords"]
-    if keywords is None:
-        st.info("No keyword data yet.")
-        return
-    st.markdown(f'<div style="color:{RED};font-weight:600;margin-bottom:10px;">Negative drivers</div>', unsafe_allow_html=True)
-    st.markdown(_keyword_bars_html(keywords["negative"], RED), unsafe_allow_html=True)
-    st.divider()
-    st.markdown(f'<div style="color:{GREEN};font-weight:600;margin-bottom:10px;">Positive drivers</div>', unsafe_allow_html=True)
-    st.markdown(_keyword_bars_html(keywords["positive"], GREEN), unsafe_allow_html=True)
-
-
 def render_fundamentals(bank: dict) -> None:
     st.markdown('<div class="panel-title">FUNDAMENTALS RISK PROFILE</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="panel-caption">Composite score from a Gaussian Process classifier · bands ≤80 distress / '
         "80–90 neutral / ≥90 sound. See Metric Breakdown above for the underlying Capital / Credit Quality "
-        "ratios — the score itself isn't a simple average of them.</div>",
+        "ratios. </div>",
         unsafe_allow_html=True,
     )
 
@@ -1215,22 +1203,18 @@ def render_metric_breakdown(bank: dict) -> None:
     flag_label = f"{n_flagged} flagged" if n_flagged else "all clear"
     st.markdown(
         '<div class="panel-title">METRIC BREAKDOWN — CAPITAL · CREDIT QUALITY · LIQUIDITY · PROFITABILITY</div>'
-        f'<div class="panel-caption">FFIEC Call Report · {n_features} metrics · {flag_label}</div>',
+        f'<div class="panel-caption">FFIEC Call Report · {n_features} metrics · {flag_label}</div>'
+        '<div class="panel-caption" style="margin-top:2px;">Selective metrics shown: Call Report ratios '
+        "with a defensible % definition. Most carry a real reference point (a regulatory capital minimum, "
+        "the locked distress-rule threshold, or for unrealized securities loss, the project's own "
+        'EDA-validated materiality line); other ratios have none and show as '
+        '"no threshold" context only rather than an invented one.</div>',
         unsafe_allow_html=True,
     )
-    all_feature_names = [f["name"] for f in fundamentals["features"]]
-    shown_names = st.multiselect(
-        "Metrics shown",
-        all_feature_names,
-        default=all_feature_names,
-        key=f"metric_filter_{bank['ticker']}",
-        help="Choose which metrics appear in the breakdown table below",
-    )
-    shown_features = [f for f in fundamentals["features"] if f["name"] in shown_names]
 
     rows_html = ""
     for group in CAMELS_GROUPS:
-        group_features = [f for f in shown_features if f["group"] == group]
+        group_features = [f for f in fundamentals["features"] if f["group"] == group]
         for f in group_features:
             c = status_colors.get(f["status"], TEXT_MUTED)
             badge = pill_html(f["status"], c, f"{c}22", f"{c}66", size="0.72rem")
@@ -1244,18 +1228,15 @@ def render_metric_breakdown(bank: dict) -> None:
         "this feature. This profile is built to extend — additional Call Report ratios (e.g. net interest "
         "margin, loan growth) can be added per group as analysts need them."
     )
-    if not shown_features:
-        st.caption("No metrics selected.")
-    else:
-        st.markdown(
-            "<table class='fund-table'><thead><tr>"
-            "<th>Feature</th><th>Prior Q</th><th>Latest Q</th>"
-            f'<th>Δ QoQ <details class="info-pop"><summary>?</summary>'
-            f'<div class="info-pop-body">{qoq_help}</div></details></th>'
-            "<th>Threshold</th><th>Status</th>"
-            f"</tr></thead><tbody>{rows_html}</tbody></table>",
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        "<table class='fund-table'><thead><tr>"
+        "<th>Feature</th><th>Prior Q</th><th>Latest Q</th>"
+        f'<th>Δ QoQ <details class="info-pop"><summary>?</summary>'
+        f'<div class="info-pop-body">{qoq_help}</div></details></th>'
+        "<th>Threshold</th><th>Status</th>"
+        f"</tr></thead><tbody>{rows_html}</tbody></table>",
+        unsafe_allow_html=True,
+    )
 
     feature_names = [f["name"] for f in fundamentals["features"]]
     st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
@@ -1312,9 +1293,23 @@ def render_feature_drivers(bank: dict) -> None:
     )
     st.caption(
         "Contribution = distress_prob with this feature at its actual value, minus distress_prob with it "
-        "swapped to the peer average (others held fixed) — how much this specific input, as it stands, "
+        "swapped to the peer average (others held fixed): how much this specific input, as it stands, "
         "moves this bank's score away from a typical peer."
     )
+
+
+def _format_age(days: int) -> str:
+    """Days up to 31, whole months up to 12mo, whole years beyond that —
+    30/365-day approximations rather than calendar-aware arithmetic, matching
+    the simple date-diff already used for this panel."""
+    if days == 0:
+        return "today"
+    if days <= 31:
+        return f"{days}d ago"
+    months = days // 30
+    if months <= 12:
+        return f"{months}mo ago"
+    return f"{days // 365}y ago"
 
 
 def render_recent_items(bank: dict) -> None:
@@ -1368,7 +1363,7 @@ def render_recent_items(bank: dict) -> None:
         c = label_color.get(p["label"], TEXT_MUTED)
         badge = pill_html(p["label"], c, f"{c}22", f"{c}66", size="0.7rem")
         age_days = (today - p["date"]).days
-        age_str = "today" if age_days == 0 else f"{age_days}d ago"
+        age_str = _format_age(age_days)
         html_parts.append(
             f'<div class="recent-item" style="--item-color:{c};">'
             f'<div class="recent-title">{p["title"]} {badge}</div>'
@@ -1401,38 +1396,31 @@ def main() -> None:
     title_col, search_col = st.columns([3, 1])
     with title_col:
         st.markdown(
-            f'<span style="font-size:1.7rem;font-weight:800;color:{TEXT_PRIMARY};">Bank Stability Monitor</span> '
+            f'<span style="font-size:2.2rem;font-weight:800;color:{TEXT_PRIMARY};">Bank Stability Monitor</span> '
             f'<span style="color:{TEXT_MUTED};font-size:0.95rem;">PNC Capstone · early-warning dashboard</span> '
-            + pill_html("CONCEPT MOCKUP · ILLUSTRATIVE DATA", AMBER, f"{AMBER}14", f"{AMBER}55"),
+            + pill_html("LIVE + REPORT DATA", AMBER, f"{AMBER}14", f"{AMBER}55"),
             unsafe_allow_html=True,
         )
     bank_names = list(MOCK_BANKS.keys())
 
+    # Sole bank picker — covers all 104 tracked banks, native type-to-filter.
+    # Pre-seeding session_state (rather than passing index=) is what makes
+    # the selection persist across reruns without a separate pills widget.
+    if "bank_search" not in st.session_state:
+        st.session_state["bank_search"] = bank_names[0]
+
     with search_col:
-        # Scoped to the 4 demo banks (MOCK_BANKS), same set the pills below
-        # offer — selectbox gives native type-to-filter for free. Setting
-        # the pills' own session_state key (before they're instantiated
-        # below) is how the two stay in sync without a callback.
-        searched = st.selectbox(
+        selected_name = st.selectbox(
             "Search",
             options=bank_names,
-            index=None,
             placeholder="Search a bank... (e.g. Wells Fargo)",
             label_visibility="collapsed",
             key="bank_search",
         )
-        if searched:
-            st.session_state["bank_pills"] = searched
 
     st.divider()
 
-    with st.container(key="bank-picker"):
-        demo_name = st.pills(
-            "104 tracked · demo:", bank_names, default=bank_names[0], key="bank_pills"
-        )
-    if not demo_name:
-        demo_name = bank_names[0]
-    bank = MOCK_BANKS[demo_name]
+    bank = MOCK_BANKS[selected_name]
 
     render_header(bank)
     st.divider()
@@ -1461,24 +1449,18 @@ def main() -> None:
         with st.container(border=True, key="card-sentiment", height="stretch"):
             render_sentiment(bank)
     with col2:
-        with st.container(border=True, key="card-keywords", height="stretch"):
-            kw_col, recent_col = st.columns([1, 1])
-            with kw_col:
-                render_keywords(bank)
-            with recent_col:
-                with st.container(key="recent-in-keywords"):
-                    render_recent_items(bank)
+        with st.container(border=True, key="card-recent-items", height="stretch"):
+            render_recent_items(bank)
 
     st.divider()
     st.caption(
-        "How to read this screen — The fundamentals score comes from a "
+        "How to read this screen: The fundamentals score comes from a "
         "Gaussian Process classifier over Call Report features; sentiment "
         "from a BERT-based 3-class model trained on LLM-assisted labels. Key "
-        "Alerts surfaces any metric outside its threshold plus non-ratio "
-        "flags (e.g. open enforcement actions) — it isn't itself part of "
-        "the composite score. Sources: GDELT DOC "
-        "2.0, SEC EDGAR (8-K/10-Q/10-K), FFIEC/FDIC unified dataset, "
-        "Fed/FDIC enforcement actions."
+        "Alerts surfaces any Call Report metric outside its threshold plus "
+        "model features materially pushing distress_prob up."
+        "Sources: GDELT DOC 2.0, SEC EDGAR (8-K/10-Q/10-K), FFIEC/FDIC "
+        "unified dataset."
     )
 
 
