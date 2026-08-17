@@ -46,140 +46,165 @@ load_dotenv()
 # _INDEX_SCORES/_INDEX_FEATURES only — load_fundamentals_mock() and every
 # render_* function stay as-is.
 
-# bank_index_score: live read (read-only, per docs/roles/ — no writes, no other
-# module's code imported, just the shared table). WHERE bank_id IS NOT NULL
-# scopes to the 105 tracked banks; live already carries the production
-# quarters (gp50_prod_v1, 2025Q2 on) on top of the gp50_oos_v1 backtest, which
-# the committed backfill parquet in index/data/ doesn't have. quarter_end_date
-# comes back as a native date; cast to string so _quarter_label()'s "-" split
-# keeps working unchanged.
-with psycopg.connect(os.environ["SUPABASE_DB_URL"], row_factory=dict_row) as _conn:
-    with _conn.cursor() as _cur:
-        _cur.execute(
-            "SELECT fdic_cert_number, quarter_end_date, bank_id, distress_prob, "
-            "score, band, score_lo_80, score_hi_80, score_lo_95, score_hi_95, "
-            "latent_mean, latent_var, n_missing_features, model_version, "
-            "config_version, computed_at "
-            "FROM bank_index_score WHERE bank_id IS NOT NULL"
-        )
-        _INDEX_SCORES = pd.DataFrame(_cur.fetchall())
 
-        # bank_index_feature: real, for load_feature_attribution() (the "what's
-        # unusual about this bank" panel) — separate from _INDEX_FEATURES
-        # (still mock), which the CAMELS-shaped panel keeps using untouched.
-        # No bank_id column on this table (see 012_index_tables.sql), so the
-        # tracked-bank scope is reapplied via fdic_cert_number against
-        # bank_index_score — same set bank_id IS NOT NULL selected above.
-        # Was unscoped: fact_call_report covers the full national filer
-        # panel (167k+ bank-quarters per the fundamentals report), so an
-        # unfiltered read here pulled far more into memory than the
-        # dashboard ever uses, which is the likely cause of the Cloud OOM.
-        _cur.execute(
-            "SELECT fdic_cert_number, quarter_end_date, feature_name, "
-            "display_name, value, is_imputed FROM bank_index_feature "
-            "WHERE fdic_cert_number IN "
-            "(SELECT fdic_cert_number FROM bank_index_score WHERE bank_id IS NOT NULL)"
-        )
-        _MODEL_FEATURES = pd.DataFrame(_cur.fetchall())
+@st.cache_data(ttl=3600)
+def _load_data():
+    """All 5 live/backfill reads below, cached per session (refreshed hourly).
+    Streamlit reruns this whole module on every widget interaction, so
+    without caching, switching banks/metrics/pages was re-running all 5 SQL
+    queries plus the CSV backfill read on every single click."""
+    # bank_index_score: live read (read-only, per docs/roles/ — no writes, no other
+    # module's code imported, just the shared table). WHERE bank_id IS NOT NULL
+    # scopes to the 105 tracked banks; live already carries the production
+    # quarters (gp50_prod_v1, 2025Q2 on) on top of the gp50_oos_v1 backtest, which
+    # the committed backfill parquet in index/data/ doesn't have. quarter_end_date
+    # comes back as a native date; cast to string so _quarter_label()'s "-" split
+    # keeps working unchanged.
+    with psycopg.connect(os.environ["SUPABASE_DB_URL"], row_factory=dict_row) as _conn:
+        with _conn.cursor() as _cur:
+            _cur.execute(
+                "SELECT fdic_cert_number, quarter_end_date, bank_id, distress_prob, "
+                "score, band, score_lo_80, score_hi_80, score_lo_95, score_hi_95, "
+                "latent_mean, latent_var, n_missing_features, model_version, "
+                "config_version, computed_at "
+                "FROM bank_index_score WHERE bank_id IS NOT NULL"
+            )
+            index_scores = pd.DataFrame(_cur.fetchall())
 
-        # fact_call_report: real CAMELS-style ratios, replacing the mock CSV
-        # the metric-breakdown table used to read. Only the 5 fields with a
-        # defensible % definition are kept — liquidity_ratio's real scale
-        # didn't match the old mock's threshold band (never reconciled, see
-        # earlier note) and fee_income_ratio was never populated in either
-        # source; both stay excluded rather than wired in unverified.
-        # Scoped to tracked banks for the same reason as bank_index_feature
-        # above — this table is the full national filer panel otherwise.
-        _cur.execute(
-            "SELECT fdic_cert_number, report_date, total_assets, "
-            "tier1_capital_ratio, total_capital_ratio, npl_ratio, "
-            "loan_loss_allowance_ratio, cre_loans FROM fact_call_report "
-            "WHERE fdic_cert_number IN "
-            "(SELECT fdic_cert_number FROM bank_index_score WHERE bank_id IS NOT NULL)"
-        )
-        _CALL_REPORT = pd.DataFrame(_cur.fetchall())
+            # bank_index_feature: real, for load_feature_attribution() (the "what's
+            # unusual about this bank" panel) — separate from _INDEX_FEATURES
+            # (still mock), which the CAMELS-shaped panel keeps using untouched.
+            # No bank_id column on this table (see 012_index_tables.sql), so the
+            # tracked-bank scope is reapplied via fdic_cert_number against
+            # bank_index_score — same set bank_id IS NOT NULL selected above.
+            # Was unscoped: fact_call_report covers the full national filer
+            # panel (167k+ bank-quarters per the fundamentals report), so an
+            # unfiltered read here pulled far more into memory than the
+            # dashboard ever uses, which is the likely cause of the Cloud OOM.
+            _cur.execute(
+                "SELECT fdic_cert_number, quarter_end_date, feature_name, "
+                "display_name, value, is_imputed FROM bank_index_feature "
+                "WHERE fdic_cert_number IN "
+                "(SELECT fdic_cert_number FROM bank_index_score WHERE bank_id IS NOT NULL)"
+            )
+            model_features = pd.DataFrame(_cur.fetchall())
 
-        # bank_sentiment_quarter: live read (db/migrations/016_sentiment_
-        # aggregate.sql, same read-only contract as bank_index_score above).
-        # Only 2025Q1 onward has real signal; earlier quarters read back as
-        # n_scored=0 filler against the call-report calendar, so the date
-        # filter both avoids that filler and avoids double-counting the
-        # 2020-2024 window the CSV backfill below already covers.
-        _cur.execute(
-            "SELECT bank_id, quarter_end_date, n_scored, n_negative, n_positive, "
-            "mean_p_negative, mean_p_positive FROM bank_sentiment_quarter "
-            "WHERE quarter_end_date > '2024-12-31'"
-        )
-        _SENTIMENT_LIVE = pd.DataFrame(_cur.fetchall())
+            # fact_call_report: real CAMELS-style ratios, replacing the mock CSV
+            # the metric-breakdown table used to read. Only the 5 fields with a
+            # defensible % definition are kept — liquidity_ratio's real scale
+            # didn't match the old mock's threshold band (never reconciled, see
+            # earlier note) and fee_income_ratio was never populated in either
+            # source; both stay excluded rather than wired in unverified.
+            # Scoped to tracked banks for the same reason as bank_index_feature
+            # above — this table is the full national filer panel otherwise.
+            _cur.execute(
+                "SELECT fdic_cert_number, report_date, total_assets, "
+                "tier1_capital_ratio, total_capital_ratio, npl_ratio, "
+                "loan_loss_allowance_ratio, cre_loans FROM fact_call_report "
+                "WHERE fdic_cert_number IN "
+                "(SELECT fdic_cert_number FROM bank_index_score WHERE bank_id IS NOT NULL)"
+            )
+            call_report = pd.DataFrame(_cur.fetchall())
 
-        # raw_item x item_score: live scored+attributed items for RECENT
-        # ITEMS (Jiwon, PR #15 comment 2026-08-15, step 3 — "live window
-        # only", i.e. the DB's ongoing GDELT/EDGAR polling, not the
-        # file-based backtest corpus). Item-level, so scoped to the 4 demo
-        # banks rather than all 104 like the quarter-level tables above.
-        _cur.execute(
-            "SELECT ri.bank_id, ri.title, ri.url, ri.domain, ri.source, "
-            "ri.published_at, s.label FROM raw_item ri "
-            "JOIN item_score s ON s.raw_item_id = ri.id "
-            "WHERE ri.attributed AND ri.bank_id = ANY(%(bank_ids)s) "
-            "ORDER BY ri.published_at DESC",
-            {"bank_ids": ["wfc", "wal", "pnc", "jpm"]},
-        )
-        _RECENT_ITEMS = pd.DataFrame(_cur.fetchall())
-_INDEX_SCORES["quarter_end_date"] = _INDEX_SCORES["quarter_end_date"].astype(str)
-_MODEL_FEATURES["quarter_end_date"] = _MODEL_FEATURES["quarter_end_date"].astype(str)
-_MODEL_FEATURES["value"] = _MODEL_FEATURES["value"].astype(float)  # numeric column -> Decimal by default
-_CALL_REPORT["report_date"] = _CALL_REPORT["report_date"].astype(str)
-for _col in ("total_assets", "tier1_capital_ratio", "total_capital_ratio",
-             "npl_ratio", "loan_loss_allowance_ratio", "cre_loans"):
-    _CALL_REPORT[_col] = _CALL_REPORT[_col].astype(float)
-_SENTIMENT_LIVE["quarter_end_date"] = _SENTIMENT_LIVE["quarter_end_date"].astype(str)
-for _col in ("n_scored", "n_negative", "n_positive"):
-    _SENTIMENT_LIVE[_col] = _SENTIMENT_LIVE[_col].astype(int)
-for _col in ("mean_p_negative", "mean_p_positive"):
-    _SENTIMENT_LIVE[_col] = _SENTIMENT_LIVE[_col].astype(float)
+            # bank_sentiment_quarter: live read (db/migrations/016_sentiment_
+            # aggregate.sql, same read-only contract as bank_index_score above).
+            # Only 2025Q1 onward has real signal; earlier quarters read back as
+            # n_scored=0 filler against the call-report calendar, so the date
+            # filter both avoids that filler and avoids double-counting the
+            # 2020-2024 window the CSV backfill below already covers.
+            _cur.execute(
+                "SELECT bank_id, quarter_end_date, n_scored, n_negative, n_positive, "
+                "mean_p_negative, mean_p_positive FROM bank_sentiment_quarter "
+                "WHERE quarter_end_date > '2024-12-31'"
+            )
+            sentiment_live = pd.DataFrame(_cur.fetchall())
 
-# History: index/data/sentiment_quarter_backfill.csv (2020Q1-2024Q4, same
-# schema, committed 2026-08-15 per Jiwon's PR #15 comment). Union on
-# (bank_id, quarter_end_date) — the two windows don't overlap by construction
-# of the live query's date filter above.
-_SENTIMENT_HIST = pd.read_csv(
-    Path(__file__).parents[1] / "index" / "data" / "sentiment_quarter_backfill.csv",
-    usecols=["bank_id", "quarter_end_date", "n_scored", "n_negative", "n_positive",
-             "mean_p_negative", "mean_p_positive"],
-)
-_SENTIMENT = pd.concat([_SENTIMENT_HIST, _SENTIMENT_LIVE], ignore_index=True)
-_SENTIMENT = _SENTIMENT[_SENTIMENT["n_scored"] > 0].sort_values(
-    ["bank_id", "quarter_end_date"]
-)
-_RECENT_ITEMS["published_at"] = pd.to_datetime(_RECENT_ITEMS["published_at"], utc=True)
+            # raw_item x item_score: live scored+attributed items for RECENT
+            # ITEMS (Jiwon, PR #15 comment 2026-08-15, step 3 — "live window
+            # only", i.e. the DB's ongoing GDELT/EDGAR polling, not the
+            # file-based backtest corpus). Item-level, so scoped to the 4 demo
+            # banks rather than all 104 like the quarter-level tables above.
+            _cur.execute(
+                "SELECT ri.bank_id, ri.title, ri.url, ri.domain, ri.source, "
+                "ri.published_at, s.label FROM raw_item ri "
+                "JOIN item_score s ON s.raw_item_id = ri.id "
+                "WHERE ri.attributed AND ri.bank_id = ANY(%(bank_ids)s) "
+                "ORDER BY ri.published_at DESC",
+                {"bank_ids": ["wfc", "wal", "pnc", "jpm"]},
+            )
+            recent_items = pd.DataFrame(_cur.fetchall())
 
-# Refit of the frozen gp50_prod_v1 model (index/fundamentals/{train_sample.parquet,
-# frozen_params.json}, copied from the scoring branch — same files
-# freeze.py wrote and final_model.py fits from). optimizer=None means the
-# kernel hyperparameters are fixed rather than learned, so this refit is
-# deterministic given the same data and seed — validated by scoring real bank-
-# quarters through it and matching bank_index_score's published distress_prob
-# to 4 decimal places for every gp50_prod_v1 row checked. Only gp50_prod_v1 is
-# reproduced this way; gp50_oos_v1 (backtest) rows come from separate per-fold
-# models this refit does not represent, so load_feature_attribution() only
-# runs for a bank's latest quarter when it's gp50_prod_v1.
-_FUNDAMENTALS_DIR = Path(__file__).resolve().parent.parent / "index" / "fundamentals"
-_frozen = json.loads((_FUNDAMENTALS_DIR / "frozen_params.json").read_text())
-_GP_FEATURES = _frozen["features"]
-_GP_DIM = _frozen["dim"]
-_GP_SEED = _frozen["seed"]
-_PLATT_COEF = _frozen["platt"]["coef"]
-_PLATT_INTERCEPT = _frozen["platt"]["intercept"]
+    index_scores["quarter_end_date"] = index_scores["quarter_end_date"].astype(str)
+    model_features["quarter_end_date"] = model_features["quarter_end_date"].astype(str)
+    model_features["value"] = model_features["value"].astype(float)  # numeric column -> Decimal by default
+    call_report["report_date"] = call_report["report_date"].astype(str)
+    for _col in ("total_assets", "tier1_capital_ratio", "total_capital_ratio",
+                 "npl_ratio", "loan_loss_allowance_ratio", "cre_loans"):
+        call_report[_col] = call_report[_col].astype(float)
+    sentiment_live["quarter_end_date"] = sentiment_live["quarter_end_date"].astype(str)
+    for _col in ("n_scored", "n_negative", "n_positive"):
+        sentiment_live[_col] = sentiment_live[_col].astype(int)
+    for _col in ("mean_p_negative", "mean_p_positive"):
+        sentiment_live[_col] = sentiment_live[_col].astype(float)
 
-_train_sample = pd.read_parquet(_FUNDAMENTALS_DIR / "train_sample.parquet")
-_gp_X = _train_sample[_GP_FEATURES].values.astype(np.float64)
-_gp_y = _train_sample["y"].values
-_gp_scaler = _StandardScaler().fit(_gp_X)
-_gp_model = _GPC(
-    kernel=_C(10.0) * _Matern(np.ones(_GP_DIM) * np.sqrt(_GP_DIM) * 1.5, nu=1.5),
-    optimizer=None, random_state=_GP_SEED,
-).fit(_gp_scaler.transform(_gp_X), _gp_y)
+    # History: index/data/sentiment_quarter_backfill.csv (2020Q1-2024Q4, same
+    # schema, committed 2026-08-15 per Jiwon's PR #15 comment). Union on
+    # (bank_id, quarter_end_date) — the two windows don't overlap by construction
+    # of the live query's date filter above.
+    sentiment_hist = pd.read_csv(
+        Path(__file__).parents[1] / "index" / "data" / "sentiment_quarter_backfill.csv",
+        usecols=["bank_id", "quarter_end_date", "n_scored", "n_negative", "n_positive",
+                 "mean_p_negative", "mean_p_positive"],
+    )
+    sentiment = pd.concat([sentiment_hist, sentiment_live], ignore_index=True)
+    sentiment = sentiment[sentiment["n_scored"] > 0].sort_values(
+        ["bank_id", "quarter_end_date"]
+    )
+    recent_items["published_at"] = pd.to_datetime(recent_items["published_at"], utc=True)
+
+    return index_scores, model_features, call_report, sentiment, recent_items
+
+
+_INDEX_SCORES, _MODEL_FEATURES, _CALL_REPORT, _SENTIMENT, _RECENT_ITEMS = _load_data()
+
+
+@st.cache_resource
+def _load_gp_model():
+    """Refit of the frozen gp50_prod_v1 model (index/fundamentals/{train_sample.parquet,
+    frozen_params.json}, copied from the scoring branch — same files
+    freeze.py wrote and final_model.py fits from). optimizer=None means the
+    kernel hyperparameters are fixed rather than learned, so this refit is
+    deterministic given the same data and seed — validated by scoring real bank-
+    quarters through it and matching bank_index_score's published distress_prob
+    to 4 decimal places for every gp50_prod_v1 row checked. Only gp50_prod_v1 is
+    reproduced this way; gp50_oos_v1 (backtest) rows come from separate per-fold
+    models this refit does not represent, so load_feature_attribution() only
+    runs for a bank's latest quarter when it's gp50_prod_v1.
+
+    cache_resource (not cache_data) because the fitted GPC/scaler are unpicklable
+    the way cache_data expects, and because this fit is O(n^3) in training rows —
+    the single most expensive step on the page, and the main reason bank/metric/
+    pagination switches felt slow before this was cached."""
+    fundamentals_dir = Path(__file__).resolve().parent.parent / "index" / "fundamentals"
+    frozen = json.loads((fundamentals_dir / "frozen_params.json").read_text())
+    gp_features = frozen["features"]
+    gp_dim = frozen["dim"]
+    gp_seed = frozen["seed"]
+    platt_coef = frozen["platt"]["coef"]
+    platt_intercept = frozen["platt"]["intercept"]
+
+    train_sample = pd.read_parquet(fundamentals_dir / "train_sample.parquet")
+    gp_x = train_sample[gp_features].values.astype(np.float64)
+    gp_y = train_sample["y"].values
+    gp_scaler = _StandardScaler().fit(gp_x)
+    gp_model = _GPC(
+        kernel=_C(10.0) * _Matern(np.ones(gp_dim) * np.sqrt(gp_dim) * 1.5, nu=1.5),
+        optimizer=None, random_state=gp_seed,
+    ).fit(gp_scaler.transform(gp_x), gp_y)
+    return gp_model, gp_scaler, gp_features, gp_dim, platt_coef, platt_intercept
+
+
+_gp_model, _gp_scaler, _GP_FEATURES, _GP_DIM, _PLATT_COEF, _PLATT_INTERCEPT = _load_gp_model()
 
 
 def _gp_distress_prob(rows: np.ndarray) -> np.ndarray:
