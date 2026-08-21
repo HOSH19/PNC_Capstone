@@ -457,11 +457,17 @@ def load_sentiment(bank_id: str) -> dict | None:
         label = "Neutral"
 
     neutral_n = latest["n_scored"] - latest["n_negative"] - latest["n_positive"]
+    # The trend charts the live collection window only (quarters after the
+    # 2020-2024 file backfill — the loader's own cutoff): the two corpora are
+    # collected and attributed differently (scoring/DESIGN.md § attribution),
+    # and splicing them onto one axis reads as one continuous series.
+    live = rows[rows["quarter_end_date"] > "2024-12-31"]
     return {
-        # Net sentiment: mean p(negative) - mean p(positive) over scored
-        # items, in [-1, 1]. Only used for display/trend charting —
+        # Net sentiment: mean p(positive) - mean p(negative) over scored
+        # items, in [-1, 1], higher = more positive — matches the badge and
+        # the share bar (issue #21). Only used for display/trend charting —
         # compute_status() keys off `label`, never this value.
-        "score": round(float(latest["mean_p_negative"] - latest["mean_p_positive"]), 2),
+        "score": round(float(latest["mean_p_positive"] - latest["mean_p_negative"]), 2),
         "label": label,
         "n_items": int(latest["n_scored"]),
         "pct": {
@@ -471,8 +477,10 @@ def load_sentiment(bank_id: str) -> dict | None:
         },
         "trend": [
             round(float(v), 2)
-            for v in (rows["mean_p_negative"] - rows["mean_p_positive"])
+            for v in (live["mean_p_positive"] - live["mean_p_negative"])
         ],
+        "quarters": [_quarter_label(d) for d in live["quarter_end_date"]],
+        "trend_n": [int(n) for n in live["n_scored"]],
     }
 
 
@@ -803,10 +811,58 @@ def _feature_history_chart(quarters: list, values: list, color: str) -> alt.Char
     )
 
 
+# Below this many scored items a quarter's net sentiment is dominated by a
+# handful of articles (the 2026Q2 spike in issue #21 was 5-7 PR-wire items
+# per bank), so the trend chart fades those points instead of presenting
+# them with full confidence. ponytail: fade-only heuristic; revisit the cut
+# (or drop the points) once live collection has a few full quarters.
+SENT_TREND_MIN_N = 8
+
+
+def _sentiment_trend_chart(
+    quarters: list, scores: list, n_items: list
+) -> alt.Chart:
+    df = pd.DataFrame({"quarter": quarters, "score": scores, "items": n_items})
+    y_pad = max(0.1, (max(scores) - min(scores)) * 0.2)
+    base = alt.Chart(df).encode(
+        x=alt.X("quarter:N", sort=quarters, title=None, axis=alt.Axis(
+            labelColor=TEXT_MUTED, labelFontSize=11, labelAngle=-45,
+            labelOverlap="greedy", grid=False, domainColor=BORDER,
+            tickColor=BORDER,
+        )),
+        y=alt.Y("score:Q", title=None,
+                scale=alt.Scale(domain=[min(scores) - y_pad,
+                                        max(scores) + y_pad]),
+                axis=alt.Axis(labelColor=TEXT_MUTED, labelFontSize=11,
+                              gridColor=BORDER, domainColor=BORDER,
+                              tickColor=BORDER)),
+    )
+    # Line and points are separate layers: a conditional opacity on the line
+    # itself would split it into per-opacity series.
+    line = base.mark_line(color=RED, strokeWidth=2)
+    points = base.mark_point(filled=True, size=60, color=RED).encode(
+        opacity=alt.condition(alt.datum.items >= SENT_TREND_MIN_N,
+                              alt.value(1.0), alt.value(0.35)),
+        tooltip=[
+            alt.Tooltip("quarter:N", title="Quarter"),
+            alt.Tooltip("score:Q", title="Net sentiment"),
+            alt.Tooltip("items:Q", title="Items scored"),
+        ],
+    )
+    layered = (line + points).properties(
+        height=160, background="transparent"
+    )
+    return layered.configure_view(strokeWidth=0)
+
+
 def _qoq_delta_html(prior: float, latest: float, threshold: str) -> str:
     """Arrow shows the raw direction of the number; color shows whether that
     direction is good or bad given the feature's threshold (>=, <=, or a
-    band, where improvement means moving toward the band's center)."""
+    band, where improvement means moving toward the band's center).
+
+    The delta is in percentage points (latest - prior): every feature in
+    this table is already a % ratio, and relative % change breaks on sign
+    flips — deposits QoQ -1.77 -> 1.14 rendered as "▲ 164.4%" (issue #21)."""
     threshold = threshold.strip()
     if threshold.startswith("≥"):
         improved = latest >= prior
@@ -819,11 +875,10 @@ def _qoq_delta_html(prior: float, latest: float, threshold: str) -> str:
     else:
         improved = latest >= prior
 
-    pct = None if prior == 0 else (latest - prior) / abs(prior) * 100
     arrow = "▲" if latest > prior else ("▼" if latest < prior else "—")
     color = GREEN if improved else RED
-    pct_str = f"{abs(pct):.1f}%" if pct is not None else "—"
-    return f'<span style="color:{color};font-weight:600;">{arrow} {pct_str}</span>'
+    pp = f"{abs(latest - prior):.2f}pp"
+    return f'<span style="color:{color};font-weight:600;">{arrow} {pp}</span>'
 
 
 CSS = f"""
@@ -1144,7 +1199,21 @@ def render_sentiment(bank: dict) -> None:
         "</div>",
         unsafe_allow_html=True,
     )
-    st.line_chart(sentiment["trend"], height=160, color=RED)
+    if trend:
+        st.altair_chart(
+            _sentiment_trend_chart(
+                sentiment["quarters"], trend, sentiment["trend_n"]
+            ),
+            width="stretch",
+            theme=None,
+        )
+    st.caption(
+        f"Net sentiment (positive − negative) by quarter, live collection "
+        f"only (started mid-2026). Faded points: fewer than "
+        f"{SENT_TREND_MIN_N} scored items that quarter — read as "
+        "low-confidence. The 2020–2024 file backfill is scored separately "
+        "and not charted here."
+    )
 
 
 def render_fundamentals(bank: dict) -> None:
@@ -1224,8 +1293,11 @@ def render_metric_breakdown(bank: dict) -> None:
                 f"<td>{f['threshold']}</td><td>{badge}</td></tr>"
             )
     qoq_help = (
-        "Arrow = raw direction of the number. Color = whether that move is good (green) or bad (red) for "
-        "this feature. This profile is built to extend — additional Call Report ratios (e.g. net interest "
+        "Change vs prior quarter in percentage points (all these ratios are "
+        "already %; relative % change misleads when a value crosses zero). "
+        "Arrow = raw direction of the number. Color = whether that move is "
+        "good (green) or bad (red) for this feature. This profile is built "
+        "to extend — additional Call Report ratios (e.g. net interest "
         "margin, loan growth) can be added per group as analysts need them."
     )
     st.markdown(
