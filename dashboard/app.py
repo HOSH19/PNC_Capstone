@@ -457,6 +457,11 @@ def load_sentiment(bank_id: str) -> dict | None:
         label = "Neutral"
 
     neutral_n = latest["n_scored"] - latest["n_negative"] - latest["n_positive"]
+    # The trend charts the live collection window only (quarters after the
+    # 2020-2024 file backfill — the loader's own cutoff): the two corpora are
+    # collected and attributed differently (scoring/DESIGN.md § attribution),
+    # and splicing them onto one axis reads as one continuous series.
+    live = rows[rows["quarter_end_date"] > "2024-12-31"]
     return {
         # Net sentiment: mean p(positive) - mean p(negative) over scored
         # items, in [-1, 1], higher = more positive — matches the badge and
@@ -472,10 +477,10 @@ def load_sentiment(bank_id: str) -> dict | None:
         },
         "trend": [
             round(float(v), 2)
-            for v in (rows["mean_p_positive"] - rows["mean_p_negative"])
+            for v in (live["mean_p_positive"] - live["mean_p_negative"])
         ],
-        "quarters": [_quarter_label(d) for d in rows["quarter_end_date"]],
-        "trend_n": [int(n) for n in rows["n_scored"]],
+        "quarters": [_quarter_label(d) for d in live["quarter_end_date"]],
+        "trend_n": [int(n) for n in live["n_scored"]],
     }
 
 
@@ -1194,16 +1199,20 @@ def render_sentiment(bank: dict) -> None:
         "</div>",
         unsafe_allow_html=True,
     )
-    st.altair_chart(
-        _sentiment_trend_chart(sentiment["quarters"], trend, sentiment["trend_n"]),
-        width="stretch",
-        theme=None,
-    )
+    if trend:
+        st.altair_chart(
+            _sentiment_trend_chart(
+                sentiment["quarters"], trend, sentiment["trend_n"]
+            ),
+            width="stretch",
+            theme=None,
+        )
     st.caption(
-        f"Net sentiment (positive − negative) by quarter. Faded points: "
-        f"fewer than {SENT_TREND_MIN_N} scored items that quarter — read as "
-        "low-confidence. No data collected 2025Q1–2026Q1 (live pipeline "
-        "started mid-2026; 2020–2024 is the file backfill)."
+        f"Net sentiment (positive − negative) by quarter, live collection "
+        f"only (started mid-2026). Faded points: fewer than "
+        f"{SENT_TREND_MIN_N} scored items that quarter — read as "
+        "low-confidence. The 2020–2024 file backfill is scored separately "
+        "and not charted here."
     )
 
 
