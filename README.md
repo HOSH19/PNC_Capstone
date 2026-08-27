@@ -2,7 +2,7 @@
 
 Combines **FFIEC Call Report fundamentals** with **public text signals** (news, SEC filings, enforcement actions) to flag emerging bank risk before quarterly filings catch up.
 
-> Can text sentiment improve early distress detection beyond ratios alone? **Yes — on first combined backtest** the four-tier ladder beats both axes alone ([report](evals/reports/2026-08-14_combined_ladder.md)).
+> Can text sentiment improve early distress detection beyond ratios alone? **Yes. On first combined backtest** the four-tier ladder beats both axes alone ([report](evals/reports/2026-08-14_combined_ladder.md)).
 
 ## End-to-end flow
 
@@ -48,7 +48,7 @@ flowchart LR
 
 ## Two axes → one ladder
 
-Each bank-quarter gets a **fundamentals score** (0–100, GP over Call Report features) and a **sentiment profile** (FinBERT 3-class labels rolled up per quarter). A rule ladder — not a weighted blend — assigns the health tier:
+Each bank-quarter gets a **fundamentals score** (0–100, GP over Call Report features) and a **sentiment profile** (FinBERT 3-class labels rolled up per quarter). A rule ladder (not a weighted blend) assigns the health tier:
 
 ```mermaid
 flowchart TD
@@ -102,7 +102,7 @@ flowchart TB
     STRUCT --> TBL[(fundamentals · fred · market · cfpb)]
 ```
 
-104 seed banks in [`db/seed/banks.csv`](db/seed/banks.csv). All text items land in one table; `UNIQUE (source, external_id, bank_id)` makes every poller idempotent. Watermark + overlap windows keep incremental runs self-healing — see [`RUNBOOK.md`](RUNBOOK.md).
+104 seed banks in [`db/seed/banks.csv`](db/seed/banks.csv). All text items land in one table; `UNIQUE (source, external_id, bank_id)` makes every poller idempotent. Watermark + overlap windows keep incremental runs self-healing. See [`RUNBOOK.md`](RUNBOOK.md).
 
 ## Schema (shared contract)
 
