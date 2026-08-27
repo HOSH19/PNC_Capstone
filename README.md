@@ -13,7 +13,7 @@ flowchart LR
         L1[loaders: FRED · yfinance<br/>fundamentals · CFPB]
     end
 
-    subgraph DB[(Supabase Postgres)]
+    subgraph DB[Supabase Postgres]
         RAW[(raw_item)]
         FUND[(fundamentals<br/>bank_index_score)]
         SENT[(sentiment_aggregate)]
@@ -57,7 +57,7 @@ flowchart TD
 
     C -->|Negative| D{score < 30?}
     D -->|yes| T4[Imminent Disruption]
-    D -->|no| E{score ≤ 80?}
+    D -->|no| E{score <= 80?}
     E -->|yes| T3[Elevated Risk]
     E -->|no| T2[Watch]
 
@@ -83,14 +83,14 @@ No sentiment → fundamentals-only, capped at Elevated Risk. Details: [`pipeline
 
 ```mermaid
 flowchart TB
-    subgraph TEXT[Text → raw_item]
+    subgraph TEXT[Text to raw_item]
         GKG[GDELT GKG — news]
         EDGAR[SEC EDGAR — 8-K / 10-Q / 10-K]
         ENF[FDIC · Fed · OCC enforcement]
         RSS[Agency press RSS]
     end
 
-    subgraph STRUCT[Structured → own tables]
+    subgraph STRUCT[Structured to own tables]
         FFIEC[FFIEC Call Reports]
         FDIC[FDIC BankFind + failures]
         FRED[FRED macro]
